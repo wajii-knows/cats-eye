@@ -325,3 +325,39 @@ def loudness_per_second(audio: np.ndarray) -> np.ndarray:
     x = audio[: n * 16000].reshape(n, 16000).astype(np.float32) / 32768.0
     rms = np.sqrt((x ** 2).mean(axis=1) + 1e-10)
     return (20 * np.log10(rms)).astype(np.float32)
+
+
+def extract_snapshots(video_path: Path, out_dir: Path, start: float = 0.0, end: float = 0.0,
+                      interval_sec: float = 4.0, max_snapshots: int = 25) -> list:
+    """Periodic thumbnail snapshots across [start, end] for visual AI context.
+    Returns [{'time': float, 'path': str, 'data': base64_str, 'mime': 'image/jpeg'}]."""
+    if not video_path or not Path(video_path).is_file():
+        return []
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        dur = end - start
+        if dur <= 0:
+            meta = probe(video_path)
+            end = float(meta.get("duration", 0.0))
+            dur = max(0.0, end - start)
+        if dur < 1.0:
+            return []
+        step = max(float(interval_sec), dur / max(1, max_snapshots))
+        snap_pat = out_dir / "snap_%04d.jpg"
+        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-to", f"{end:.2f}",
+             "-i", str(video_path), "-vf", f"fps=1/{step:.2f},scale=360:-2", "-q:v", "5", str(snap_pat)])
+        files = sorted(out_dir.glob("snap_*.jpg"))
+        snaps = []
+        import base64
+        for i, f in enumerate(files[:max_snapshots]):
+            t = round(start + i * step, 2)
+            try:
+                b64 = base64.b64encode(f.read_bytes()).decode("ascii")
+                snaps.append({"time": t, "path": str(f), "data": b64, "mime": "image/jpeg"})
+            except Exception:
+                pass
+        return snaps
+    except Exception:
+        return []
+

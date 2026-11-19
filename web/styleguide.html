@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cat's Eye — Design System Style Guide</title>
+  <link rel="icon" type="image/svg+xml" href="brand/favicon.svg">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/components.css">
+  <style>
+    .sg-layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: var(--ce-space-8) var(--ce-space-6) var(--ce-space-16);
+    }
+    .sg-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--ce-border);
+      padding-bottom: var(--ce-space-6);
+      margin-bottom: var(--ce-space-10);
+      flex-wrap: wrap;
+      gap: var(--ce-space-4);
+    }
+    .sg-title {
+      font-family: var(--ce-font-display);
+      font-size: var(--ce-font-3xl);
+      font-weight: 700;
+      color: var(--ce-text-primary);
+      margin: 0;
+    }
+    .sg-subtitle {
+      color: var(--ce-text-secondary);
+      font-size: var(--ce-font-base);
+      margin-top: var(--ce-space-1);
+    }
+    .sg-section {
+      margin-bottom: var(--ce-space-12);
+    }
+    .sg-section-title {
+      font-family: var(--ce-font-display);
+      font-size: var(--ce-font-2xl);
+      font-weight: 700;
+      color: var(--ce-text-primary);
+      margin-bottom: var(--ce-space-2);
+      border-bottom: 1px solid var(--ce-border-subtle);
+      padding-bottom: var(--ce-space-2);
+    }
+    .sg-section-desc {
+      color: var(--ce-text-secondary);
+      font-size: var(--ce-font-sm);
+      margin-bottom: var(--ce-space-6);
+    }
+    .sg-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--ce-space-4);
+      align-items: center;
+      margin-bottom: var(--ce-space-4);
+    }
+    .sg-grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: var(--ce-space-6);
+    }
+    .sg-swatches {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: var(--ce-space-4);
+    }
+    .sg-swatch {
+      background-color: var(--ce-surface-1);
+      border: 1px solid var(--ce-border);
+      border-radius: var(--ce-radius-md);
+      overflow: hidden;
+    }
+    .sg-swatch-color {
+      height: 60px;
+      width: 100%;
+    }
+    .sg-swatch-meta {
+      padding: var(--ce-space-3);
+    }
+    .sg-swatch-name {
+      font-weight: 600;
+      font-size: var(--ce-font-xs);
+    }
+    .sg-swatch-val {
+      font-family: var(--ce-font-mono);
+      font-size: var(--ce-font-xs);
+      color: var(--ce-text-secondary);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="sg-layout">
+    <!-- Header with Theme Switcher -->
+    <header class="sg-header">
+      <div>
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <img src="brand/favicon.svg" alt="" width="32" height="32">
+          <h1 class="sg-title">Cat's Eye Style Guide</h1>
+        </div>
+        <p class="sg-subtitle">Obsidian & Amber Gold component inventory, tokens, and WCAG AA interaction states.</p>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <label class="ce-toggle">
+          <input type="checkbox" id="theme-toggle">
+          <span class="ce-toggle-slider"></span>
+          <span id="theme-label" style="font-size: var(--ce-font-sm); font-weight: 600;">Dark Theme</span>
+        </label>
+      </div>
+    </header>
+
+    <!-- Color Tokens -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Color Roles & Tokens</h2>
+      <p class="sg-section-desc">Obsidian darkroom foundation with high-contrast amber-gold highlights meeting WCAG AA standards.</p>
+      <div class="sg-swatches">
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-bg);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Base Canvas</div>
+            <div class="sg-swatch-val">--ce-bg</div>
+          </div>
+        </div>
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-surface-1);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Surface 1 (Panels)</div>
+            <div class="sg-swatch-val">--ce-surface-1</div>
+          </div>
+        </div>
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-surface-2);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Surface 2 (Elevated)</div>
+            <div class="sg-swatch-val">--ce-surface-2</div>
+          </div>
+        </div>
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-brand);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Brand (Amber Gold)</div>
+            <div class="sg-swatch-val">--ce-brand</div>
+          </div>
+        </div>
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-success);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Success (Emerald)</div>
+            <div class="sg-swatch-val">--ce-success</div>
+          </div>
+        </div>
+        <div class="sg-swatch">
+          <div class="sg-swatch-color" style="background-color: var(--ce-danger);"></div>
+          <div class="sg-swatch-meta">
+            <div class="sg-swatch-name">Danger (Ruby)</div>
+            <div class="sg-swatch-val">--ce-danger</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Buttons & Tooltips -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Buttons & Tooltips (.ce-btn, .ce-tooltip)</h2>
+      <p class="sg-section-desc">Interactive buttons with minimum 44px touch targets and full keyboard focus rings.</p>
+      <div class="sg-row">
+        <button class="ce-btn ce-btn-primary">Primary Action</button>
+        <button class="ce-btn ce-btn-secondary">Secondary Action</button>
+        <button class="ce-btn ce-btn-ghost">Ghost Action</button>
+        <button class="ce-btn ce-btn-danger">Destructive Action</button>
+        <button class="ce-btn ce-btn-primary ce-btn-icon" aria-label="Add item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <button class="ce-btn ce-btn-primary ce-btn-loading" disabled>Loading State</button>
+        <button class="ce-btn ce-btn-primary" disabled>Disabled</button>
+        <button class="ce-btn ce-btn-secondary ce-tooltip" data-tooltip="Frame-accurate optical trimming">Tooltip Hover</button>
+      </div>
+    </section>
+
+    <!-- Form Controls -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Form Controls (.ce-input, .ce-select, .ce-textarea)</h2>
+      <p class="sg-section-desc">Accessible text inputs, selects, toggles, textareas, and range sliders.</p>
+      <div class="sg-grid-3">
+        <div>
+          <label style="display: block; font-size: var(--ce-font-xs); font-weight: 600; margin-bottom: 6px;">Video URL or Search</label>
+          <input type="text" class="ce-input" placeholder="https://youtube.com/watch?v=..." value="">
+        </div>
+        <div>
+          <label style="display: block; font-size: var(--ce-font-xs); font-weight: 600; margin-bottom: 6px;">Framing Mode</label>
+          <select class="ce-select">
+            <option>Dynamic Multishot (Recommended)</option>
+            <option>Face Tracking Zoom</option>
+            <option>Blurred Background</option>
+            <option>Center Crop</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; font-size: var(--ce-font-xs); font-weight: 600; margin-bottom: 6px;">Min Clip Duration: <span id="range-val">30s</span></label>
+          <input type="range" class="ce-range" min="15" max="90" value="30" oninput="document.getElementById('range-val').innerText = this.value + 's'">
+        </div>
+      </div>
+      <div style="margin-top: var(--ce-space-4);">
+        <label style="display: block; font-size: var(--ce-font-xs); font-weight: 600; margin-bottom: 6px;">AI Prompt Directives</label>
+        <textarea class="ce-textarea" placeholder="Focus on emotional highlights, unexpected plot turns, and comedic timing..."></textarea>
+      </div>
+      <div style="margin-top: var(--ce-space-4);">
+        <label class="ce-toggle">
+          <input type="checkbox" checked>
+          <span class="ce-toggle-slider"></span>
+          <span style="font-size: var(--ce-font-sm);">Burn Animated Kinetic Captions</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Badges -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Badges (.ce-badge)</h2>
+      <p class="sg-section-desc">Status indicators and virality classification tags.</p>
+      <div class="sg-row">
+        <span class="ce-badge ce-badge-brand">Viral Score 98</span>
+        <span class="ce-badge ce-badge-success">Ready to Export</span>
+        <span class="ce-badge ce-badge-warning">Queue Lane 2</span>
+        <span class="ce-badge ce-badge-danger">Render Failed</span>
+        <span class="ce-badge ce-badge-info">Speech: Parakeet</span>
+        <span class="ce-badge ce-badge-muted">1080x1920</span>
+      </div>
+    </section>
+
+    <!-- Cards & Stat Tiles -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Cards & Stat Tiles (.ce-card, .ce-stat-tile)</h2>
+      <p class="sg-section-desc">Structured content containers and dashboard KPI metrics.</p>
+      <div class="sg-grid-3">
+        <div class="ce-stat-tile">
+          <div class="ce-stat-label">Total Clips Created</div>
+          <div class="ce-stat-val">1,248</div>
+          <div class="ce-stat-change positive">↑ 18% this week</div>
+        </div>
+        <div class="ce-stat-tile">
+          <div class="ce-stat-label">AI Highlight Detection</div>
+          <div class="ce-stat-val">99.4%</div>
+          <div class="ce-stat-change positive">Optical precision</div>
+        </div>
+        <div class="ce-stat-tile">
+          <div class="ce-stat-label">Storage Footprint</div>
+          <div class="ce-stat-val">42.8 GB</div>
+          <div class="ce-stat-change">of 500 GB free</div>
+        </div>
+      </div>
+
+      <div class="sg-grid-3" style="margin-top: var(--ce-space-6);">
+        <div class="ce-card ce-card-interactive">
+          <div class="ce-card-header">
+            <span style="font-weight: 600;">Interactive Clip Card</span>
+            <span class="ce-badge ce-badge-brand">9:16 Short</span>
+          </div>
+          <div class="ce-card-body">
+            <p style="color: var(--ce-text-secondary); font-size: var(--ce-font-sm);">Hover to see elevation and brand-halo outline transitions.</p>
+          </div>
+          <div class="ce-card-footer" style="display: flex; justify-content: space-between;">
+            <span style="font-family: var(--ce-font-mono); font-size: var(--ce-font-xs);">00:42.15</span>
+            <span style="font-size: var(--ce-font-xs); color: var(--ce-brand);">Multishot: 3 angles</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modals & Drawers (.ce-modal, .ce-drawer) -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Modals & Drawers (.ce-modal, .ce-drawer)</h2>
+      <div class="ce-card" style="padding: var(--ce-space-6);">
+        <div class="ce-modal-backdrop" style="position: relative; z-index: 1; background: transparent; padding: 0;">
+          <div class="ce-modal ce-drawer" style="max-width: 100%; border: 1px solid var(--ce-border);">
+            <div class="ce-modal-header">
+              <span style="font-weight: 700; font-family: var(--ce-font-display);">Trim Clip Boundaries</span>
+              <button class="ce-btn ce-btn-ghost ce-btn-icon" aria-label="Close modal">✕</button>
+            </div>
+            <div class="ce-modal-body">
+              <p style="color: var(--ce-text-secondary); font-size: var(--ce-font-sm);">Adjust start and end timestamps to fine-tune hook cadence.</p>
+            </div>
+            <div class="ce-modal-footer">
+              <button class="ce-btn ce-btn-secondary">Cancel</button>
+              <button class="ce-btn ce-btn-primary">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tabs & Tables -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Tabs & Tables (.ce-tabs, .ce-table)</h2>
+      <div class="ce-tabs" style="margin-bottom: var(--ce-space-6);">
+        <button class="ce-tab ce-tab-active">Active Jobs (3)</button>
+        <button class="ce-tab">Completed Videos</button>
+        <button class="ce-tab">Viral Clips (24)</button>
+        <button class="ce-tab">Live Broadcasts</button>
+      </div>
+
+      <div class="ce-table-container">
+        <table class="ce-table">
+          <thead>
+            <tr>
+              <th class="ce-th">Video Title</th>
+              <th class="ce-th">Duration</th>
+              <th class="ce-th">Status</th>
+              <th class="ce-th">Clips</th>
+              <th class="ce-th">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="ce-td" style="font-weight: 600;">Lex Fridman Podcast #420 - Deep Architecture</td>
+              <td class="ce-td"><span style="font-family: var(--ce-font-mono);">02:45:12</span></td>
+              <td class="ce-td"><span class="ce-badge ce-badge-success">Transcribed</span></td>
+              <td class="ce-td">8 Clips</td>
+              <td class="ce-td"><button class="ce-btn ce-btn-secondary" style="min-height: 32px; padding: 4px 12px; font-size: 12px;">Open Clips</button></td>
+            </tr>
+            <tr>
+              <td class="ce-td" style="font-weight: 600;">All-In Summit 2026 Keynote Presentation</td>
+              <td class="ce-td"><span style="font-family: var(--ce-font-mono);">01:12:00</span></td>
+              <td class="ce-td"><span class="ce-badge ce-badge-brand">Scoring Moments</span></td>
+              <td class="ce-td">Processing...</td>
+              <td class="ce-td"><button class="ce-btn ce-btn-ghost" style="min-height: 32px; padding: 4px 12px; font-size: 12px;">View Log</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Progress Bars, Skeletons & Slit Motif -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Progress, Skeletons & Slit Motif (.ce-progress, .ce-skeleton, .ce-slit-loader)</h2>
+      <p class="sg-section-desc">Visual feedback indicators featuring the cat's eye slit dilation motif.</p>
+
+      <div style="margin-bottom: var(--ce-space-6);">
+        <label style="display: flex; justify-content: space-between; font-size: var(--ce-font-xs); font-weight: 600; margin-bottom: 6px;">
+          <span>Rendering Clip #1 (Multishot layout + Subtitles)</span>
+          <span style="color: var(--ce-brand);">78%</span>
+        </label>
+        <div class="ce-progress">
+          <div class="ce-progress-bar" style="width: 78%;"></div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 20px; margin-bottom: var(--ce-space-6);">
+        <div class="ce-slit-loader" style="width: 48px; height: 48px; flex-shrink: 0;">
+          <img src="brand/loader.svg" alt="Slit loader" width="48" height="48" style="display: block;">
+        </div>
+        <div>
+          <div style="font-weight: 600; font-size: var(--ce-font-sm);">Dilating Slit Pupil Loader (.ce-slit-loader)</div>
+          <div style="font-size: var(--ce-font-xs); color: var(--ce-text-secondary); margin-top: 2px;">Animated pupil dilation simulating optical focus; automatically disables under prefers-reduced-motion.</div>
+        </div>
+      </div>
+
+      <div class="sg-grid-3">
+        <div class="ce-card" style="padding: var(--ce-space-4);">
+          <div class="ce-skeleton ce-skeleton-circle" style="margin-bottom: 12px;"></div>
+          <div class="ce-skeleton ce-skeleton-text" style="width: 70%;"></div>
+          <div class="ce-skeleton ce-skeleton-text" style="width: 40%;"></div>
+          <div class="ce-skeleton ce-skeleton-rect" style="margin-top: 12px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Banners & Empty States -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Banners & Empty States (.ce-banner, .ce-empty-state)</h2>
+      <div class="ce-banner ce-banner-info">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        <span>A new version of Cat's Eye is available. All your queues and clips are preserved.</span>
+      </div>
+      <div class="ce-banner ce-banner-warning">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        <span>Disk space below 5 GB. Consider cleaning up old raw video source files in Settings.</span>
+      </div>
+      <div class="ce-banner ce-banner-success">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>Video ingested and 6 clips rendered successfully.</span>
+      </div>
+      <div class="ce-banner ce-banner-error">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+        <span>Failed to connect to YouTube stream. Check channel permissions.</span>
+      </div>
+
+      <div class="ce-card">
+        <div class="ce-empty-state">
+          <div class="ce-empty-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+          </div>
+          <h3 class="ce-empty-title">No clips extracted yet</h3>
+          <p class="ce-empty-desc">Paste a video link or drop an MP4 file into the composer above to begin generating 9:16 vertical shorts.</p>
+          <button class="ce-btn ce-btn-primary">Paste a link or drop a video</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- File Drop Zone with Slit Scanner (.ce-dropzone, .ce-dropzone-active) -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Drop Zone with Slit Scanner (.ce-dropzone, .ce-dropzone-active)</h2>
+      <div class="ce-dropzone ce-dropzone-active" tabindex="0" role="button" aria-label="Drop video files here or click to browse">
+        <div class="ce-dropzone-slit-scanner"></div>
+        <div class="ce-dropzone-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+        </div>
+        <div>
+          <div style="font-weight: 700; font-size: var(--ce-font-lg);">Paste a link or drop a video file</div>
+          <div style="color: var(--ce-text-secondary); font-size: var(--ce-font-sm); margin-top: 4px;">Supports MP4, MOV, MKV up to 50 GB, or direct YouTube/Twitch streams</div>
+        </div>
+        <button class="ce-btn ce-btn-secondary">Browse Local Files</button>
+      </div>
+    </section>
+
+    <!-- Pagination (.ce-pagination) -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Pagination (.ce-pagination)</h2>
+      <nav class="ce-pagination" aria-label="Pagination">
+        <button class="ce-page-btn" aria-label="Previous page">‹</button>
+        <button class="ce-page-btn ce-page-active">1</button>
+        <button class="ce-page-btn">2</button>
+        <button class="ce-page-btn">3</button>
+        <button class="ce-page-btn" aria-label="Next page">›</button>
+      </nav>
+    </section>
+
+    <!-- Toasts (.ce-toast, .ce-toast-info, .ce-toast-success, .ce-toast-warning, .ce-toast-error) -->
+    <section class="sg-section">
+      <h2 class="sg-section-title">Toasts (.ce-toast)</h2>
+      <p class="sg-section-desc">Floating notifications and system alerts with semantic border cues.</p>
+      <div style="display: flex; flex-direction: column; gap: var(--ce-space-3); max-width: 440px;">
+        <div class="ce-toast ce-toast-success">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ce-success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+          <div>
+            <div style="font-weight: 600;">Clip #3 Exported</div>
+            <div style="font-size: var(--ce-font-xs); color: var(--ce-text-secondary);">Saved to clips/lex-420-03.mp4</div>
+          </div>
+        </div>
+        <div class="ce-toast ce-toast-info">
+          <div>
+            <div style="font-weight: 600;">Audio Processing Active</div>
+            <div style="font-size: var(--ce-font-xs); color: var(--ce-text-secondary);">Transcribing with local Parakeet ONNX engine...</div>
+          </div>
+        </div>
+        <div class="ce-toast ce-toast-warning">
+          <div>
+            <div style="font-weight: 600;">Storage Threshold</div>
+            <div style="font-size: var(--ce-font-xs); color: var(--ce-text-secondary);">Less than 5 GB remaining on data volume.</div>
+          </div>
+        </div>
+        <div class="ce-toast ce-toast-error">
+          <div>
+            <div style="font-weight: 600;">Stream Connection Lost</div>
+            <div style="font-size: var(--ce-font-xs); color: var(--ce-text-secondary);">Twitch broadcast ended abruptly.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dynamic Toast Container Anchor -->
+    <div class="ce-toast-container" aria-live="polite"></div>
+  </div>
+
+  <script>
+    // Theme Switcher with localStorage persistence
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeLabel = document.getElementById('theme-label');
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      if (theme === 'light') {
+        themeToggle.checked = true;
+        themeLabel.textContent = 'Light Theme';
+      } else {
+        themeToggle.checked = false;
+        themeLabel.textContent = 'Dark Theme';
+      }
+      try {
+        localStorage.setItem('cats_eye_theme', theme);
+      } catch (e) {}
+    }
+
+    let savedTheme = 'dark';
+    try {
+      savedTheme = localStorage.getItem('cats_eye_theme') || 'dark';
+    } catch (e) {}
+    applyTheme(savedTheme);
+
+    themeToggle.addEventListener('change', (e) => {
+      applyTheme(e.target.checked ? 'light' : 'dark');
+    });
+  </script>
+</body>
+</html>

@@ -3,47 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{TITLE}} | PeakCut</title>
+<title>{{TITLE}} | Cat's Eye</title>
 <meta name="description" content="{{DESC}}">
 <link rel="canonical" href="{{SITE}}/{{PAGE_PATH}}">
 <meta name="robots" content="index,follow">
 <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg">
 <style>
-:root{--brand:#FF8B33;--ink:#2A1A12;--deep:#A9480A;--muted:#F7F4F1;--line:#EEE8E4;--text:#211813;--dim:#6D6159;--faint:#A0948C;color-scheme:light}
+:root{--brand:#F59E0B;--ink:#0A0B0E;--deep:#D97706;--muted:#1B1E29;--line:#2B3142;--text:#F8FAFC;--dim:#94A3B8;--faint:#475569;color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:#fff;color:var(--text);font:16px/1.7 "Geist","Segoe UI",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--deep)}
-header{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);z-index:2}
+body{margin:0;background:#0F1117;color:var(--text);font:16px/1.7 "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--brand)}
+header{position:sticky;top:0;background:#0F1117;border-bottom:1px solid var(--line);z-index:2}
 .bar{max-width:860px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 .bar img{height:30px;display:block}
 .bar nav{margin-left:auto;display:flex;gap:2px;padding:3px;background:var(--muted);border-radius:10px;overflow-x:auto;max-width:100%}
 .bar nav a{font-size:14px;font-weight:600;color:var(--dim);text-decoration:none;padding:6px 12px;border-radius:8px;white-space:nowrap;transition:background-color .15s ease,color .15s ease}
-.bar nav a:hover{background:#EDE3DB;color:var(--text)}
+.bar nav a:hover{background:#232732;color:var(--text)}
 body[data-page=privacy] nav a[href="/privacy"],body[data-page=terms] nav a[href="/terms"],
-body[data-page=acceptable-use] nav a[href="/acceptable-use"]{background:var(--brand);color:var(--ink)}
+body[data-page=acceptable-use] nav a[href="/acceptable-use"]{background:var(--brand);color:#041F16}
 main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
 article{display:none}
 body[data-page=privacy] #privacy,body[data-page=terms] #terms,body[data-page=acceptable-use] #acceptable-use{display:block}
-h1{font-size:clamp(30px,4vw,40px);line-height:1.15;letter-spacing:-.03em;margin:0 0 6px;color:var(--ink)}
+h1{font-size:clamp(30px,4vw,40px);line-height:1.15;letter-spacing:-.03em;margin:0 0 6px;color:#fff}
 .updated{color:var(--faint);font-size:14px;margin:0 0 28px}
-h2{font-size:19px;letter-spacing:-.01em;margin:34px 0 8px;color:var(--ink)}
-p,li{color:#3B2E27}
+h2{font-size:19px;letter-spacing:-.01em;margin:34px 0 8px;color:#fff}
+p,li{color:#CBD2E1}
 ul{padding-left:20px}
 li{margin:4px 0}
-.box{background:var(--muted);border-radius:12px;padding:16px 18px;margin:18px 0}
+.box{background:var(--muted);border-radius:12px;padding:16px 18px;margin:18px 0;border:1px solid var(--line)}
 .caps{font-weight:600}
-footer.site{background:#1E1612;color:#B9A597;padding:56px 0 28px;font-size:14px}
+footer.site{background:#0F1117;color:var(--dim);padding:56px 0 28px;font-size:14px;border-top:1px solid var(--line)}
 footer.site .fwrap{max-width:1160px;margin:0 auto;padding:0 24px}
 footer.site .fgrid{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
 footer.site .fbrand img{height:30px;display:block;margin-bottom:14px}
-footer.site .fbrand p{max-width:300px;line-height:1.6;margin:0 0 18px;color:#B9A597}
-footer.site .fbrand a.fcta{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:10px;background:#FF8B33;color:#2A1A12;font-weight:600;text-decoration:none;transition:background-color .15s ease}
-footer.site .fbrand a.fcta:hover{background:#FF9A4C}
+footer.site .fbrand p{max-width:300px;line-height:1.6;margin:0 0 18px;color:var(--dim)}
+footer.site .fbrand a.fcta{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:10px;background:#10B981;color:#041F16;font-weight:600;text-decoration:none;transition:background-color .15s ease}
+footer.site .fbrand a.fcta:hover{background:#34D399}
 footer.site h4{font-size:13px;font-weight:600;color:#fff;margin:4px 0 14px}
 footer.site ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}
-footer.site ul a{color:#B9A597;text-decoration:none;transition:color .15s ease}
-footer.site ul a:hover{color:#FF8B33}
-footer.site .fbottom{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:44px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08);font-size:13px;color:#8C7B70}
+footer.site ul a{color:var(--dim);text-decoration:none;transition:color .15s ease}
+footer.site ul a:hover{color:#10B981}
+footer.site .fbottom{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:44px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08);font-size:13px;color:var(--faint)}
 @media (max-width:760px){footer.site .fgrid{grid-template-columns:1fr 1fr}footer.site .fbrand{grid-column:1/-1}}
 html{scroll-behavior:smooth}
 article{animation:legalin .35s ease both}
@@ -52,7 +52,7 @@ article{animation:legalin .35s ease both}
 </style>
 </head>
 <body data-page="{{PAGE}}">
-<header><div class="bar"><a href="/" aria-label="PeakCut home"><img src="/brand/logo.svg" alt="PeakCut" width="120" height="30"></a>
+<header><div class="bar"><a href="/" aria-label="Cat's Eye home"><img src="/brand/logo.svg" alt="Cat's Eye" width="120" height="30"></a>
   <nav aria-label="Legal pages"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/acceptable-use">Acceptable use</a></nav></div></header>
 <main>
 
@@ -60,10 +60,10 @@ article{animation:legalin .35s ease both}
 <article id="terms">
 <h1>Terms of Service</h1>
 <p class="updated">Last updated 13 November 2026</p>
-<p>These Terms are a binding agreement between you and {{NAME}} ("PeakCut", "we", "us") for the use of the website and app at {{SITE}} (the "Service"). By creating an account or using the Service you accept these Terms, our <a href="/privacy">Privacy Policy</a> and our <a href="/acceptable-use">Acceptable Use Policy</a>. If you do not agree, do not use the Service.</p>
+<p>These Terms are a binding agreement between you and {{NAME}} ("Cat's Eye", "we", "us") for the use of the website and app at {{SITE}} (the "Service"). By creating an account or using the Service you accept these Terms, our <a href="/privacy">Privacy Policy</a> and our <a href="/acceptable-use">Acceptable Use Policy</a>. If you do not agree, do not use the Service.</p>
 
 <h2>1. The Service</h2>
-<p>PeakCut finds moments in videos and live streams, cuts them into short vertical clips with captions and titles, and can post them to accounts you connect. Clip selection, captions, titles and other output are produced automatically, partly by artificial intelligence, and may be inaccurate, incomplete or unsuitable. You are responsible for reviewing anything before you publish or rely on it.</p>
+<p>Cat's Eye finds moments in videos and live streams, cuts them into short vertical clips with captions and titles, and can post them to accounts you connect. Clip selection, captions, titles and other output are produced automatically, partly by artificial intelligence, and may be inaccurate, incomplete or unsuitable. You are responsible for reviewing anything before you publish or rely on it.</p>
 
 <h2>2. Your account</h2>
 <ul>
@@ -96,7 +96,7 @@ article{animation:legalin .35s ease both}
 <p>Connected accounts and third-party platforms are governed by their own terms and policies. We are not responsible for their availability, decisions, content removal, account actions or changes to their access rules, including any that stop features of the Service from working.</p>
 
 <h2>7. Intellectual property and copyright complaints</h2>
-<p>The PeakCut software is open source and is licensed under the terms in its source repository. The content on this site belongs to us and our licensors. If you believe content processed through PeakCut infringes your copyright, contact us at {{CONTACT}} with the details of the work, the material, and your contact information, and we will respond and act on valid notices.</p>
+<p>The Cat's Eye software is open source and is licensed under the terms in its source repository. The content on this site belongs to us and our licensors. If you believe content processed through Cat's Eye infringes your copyright, contact us at {{CONTACT}} with the details of the work, the material, and your contact information, and we will respond and act on valid notices.</p>
 
 <h2>8. Disclaimer</h2>
 <p class="caps">To the fullest extent permitted by law, the Service and all output are provided "as is" and "as available", without warranties of any kind, express or implied, including fitness for a particular purpose, merchantability, accuracy, non-infringement, views, reach, earnings or results.</p>
@@ -132,7 +132,7 @@ article{animation:legalin .35s ease both}
 <p class="updated">Last updated 13 November 2026</p>
 <p>This policy is part of our <a href="/terms">Terms</a>. Breaking it can lead to content removal and suspension or closure of your account.</p>
 
-<h2>You must not use PeakCut to</h2>
+<h2>You must not use Cat's Eye to</h2>
 <ul>
   <li>process, clip or publish content you do not own or have permission to use, or infringe copyright, trademark, privacy or publicity rights;</li>
   <li>create or spread content that is illegal, sexually exploits minors, promotes violence or terrorism, harasses, threatens or defames others, or is hateful;</li>
@@ -151,7 +151,7 @@ article{animation:legalin .35s ease both}
 <article id="privacy">
 <h1>Privacy Policy</h1>
 <p class="updated">Last updated 13 November 2026</p>
-<p>This policy explains what {{NAME}} ("PeakCut", "we") collects when you use {{SITE}}, why, who else handles it, how long we keep it and the choices you have. We act as the controller of this information.</p>
+<p>This policy explains what {{NAME}} ("Cat's Eye", "we") collects when you use {{SITE}}, why, who else handles it, how long we keep it and the choices you have. We act as the controller of this information.</p>
 
 <h2>What we collect</h2>
 <ul>
@@ -183,8 +183,8 @@ article{animation:legalin .35s ease both}
 <p>Some of these providers process data outside your country. Where required, we rely on appropriate safeguards such as standard contractual clauses.</p>
 
 <h2>Google user data</h2>
-<div class="box">PeakCut's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</div>
-<p>With Sign in with Google we receive only your name, email address and Google account ID, to create and sign in to your account. If you connect YouTube, we use that access only to upload the clips you choose to your channel. We do not use Google user data for advertising, do not sell it, and do not let humans read it except with your permission, for security, or where the law requires. You can remove access in your Google account's security settings or by disconnecting the account in PeakCut.</p>
+<div class="box">Cat's Eye's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.</div>
+<p>With Sign in with Google we receive only your name, email address and Google account ID, to create and sign in to your account. If you connect YouTube, we use that access only to upload the clips you choose to your channel. We do not use Google user data for advertising, do not sell it, and do not let humans read it except with your permission, for security, or where the law requires. You can remove access in your Google account's security settings or by disconnecting the account in Cat's Eye.</p>
 
 <h2>Cookies</h2>
 <p>We use one essential cookie to keep you signed in. It is not readable by page scripts and is not used for tracking. We use no advertising or analytics cookies, so no consent banner is needed.</p>
@@ -204,7 +204,7 @@ article{animation:legalin .35s ease both}
 <p>Connections are encrypted, passwords are hashed, each account's data is kept separate, and access is limited. No system is perfectly secure; if a breach affects you, we will tell you as the law requires.</p>
 
 <h2>Children</h2>
-<p>PeakCut is not meant for children under 13, or under 16 where local law sets that age. We do not knowingly collect their information and will delete it if we learn of it.</p>
+<p>Cat's Eye is not meant for children under 13, or under 16 where local law sets that age. We do not knowingly collect their information and will delete it if we learn of it.</p>
 
 <h2>Changes</h2>
 <p>We will announce material changes in the app or by email before they take effect.</p>
@@ -216,14 +216,14 @@ article{animation:legalin .35s ease both}
 </main>
 <footer class="site"><div class="fwrap">
   <div class="fgrid">
-    <div class="fbrand"><a href="/" aria-label="PeakCut home"><img src="/brand/logo-light.svg" alt="PeakCut" width="120" height="30"></a>
+    <div class="fbrand"><a href="/" aria-label="Cat's Eye home"><img src="/brand/logo-light.svg" alt="Cat's Eye" width="120" height="30"></a>
       <p>AI clipping for Twitch, Kick and YouTube streams. Captioned vertical clips while the stream is still live. Free and open source.</p>
       <a class="fcta" href="/signup">Sign up</a></div>
     <div><h4>Product</h4><ul><li><a href="/#how">How it works</a></li><li><a href="/#features">Features</a></li><li><a href="/#live">Live clipping</a></li><li><a href="/#open">Open source</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
     <div><h4>Get started</h4><ul><li><a href="/signup">Create an account</a></li><li><a href="/login">Sign in</a></li><li><a href="/reset">Reset password</a></li></ul></div>
     <div><h4>Legal</h4><ul><li><a href="/terms">Terms of Service</a></li><li><a href="/privacy">Privacy Policy</a></li><li><a href="/acceptable-use">Acceptable Use</a></li></ul></div>
   </div>
-  <div class="fbottom"><span>© <span class="fy"></span> PeakCut</span><span>Free and open source.</span></div>
+  <div class="fbottom"><span>© <span class="fy"></span> Cat's Eye</span><span>Free and open source.</span></div>
 </div></footer>
 <script>document.querySelectorAll(".fy").forEach(e => e.textContent = new Date().getFullYear());</script>
 <script>
@@ -232,7 +232,7 @@ const TITLES = {terms: "Terms of Service", privacy: "Privacy Policy", "acceptabl
 function showLegal(page, push) {
   if (!TITLES[page]) return false;
   document.body.dataset.page = page;
-  document.title = TITLES[page] + " | PeakCut";
+  document.title = TITLES[page] + " | Cat's Eye";
   const art = document.getElementById(page); art.style.animation = "none"; art.offsetWidth; art.style.animation = "";
   if (push) history.pushState({page}, "", "/" + page);
   window.scrollTo({top: 0, behavior: "smooth"});

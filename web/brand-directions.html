@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cat's Eye - Brand Direction Proposals</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --surface: #14171f;
+      --border: #242a38;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --amber: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: 'Inter', -apple-system, sans-serif;
+      padding: 40px 24px;
+      line-height: 1.5;
+    }
+    .header {
+      max-width: 1200px;
+      margin: 0 auto 48px;
+      text-align: center;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+    .subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 32px;
+      max-width: 1300px;
+      margin: 0 auto 60px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+    }
+    .card-header {
+      padding: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .card-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .preview-box {
+      padding: 28px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 160px;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .swatch {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .swatch-color {
+      width: 100%;
+      height: 40px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .swatch-hex {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .specs-list {
+      padding: 20px 24px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      font-size: 13px;
+    }
+    .spec-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .spec-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .spec-value {
+      font-weight: 500;
+    }
+    .hero-mockup {
+      margin-top: 12px;
+      border-radius: 10px;
+      padding: 20px;
+      border: 1px solid rgba(255,255,255,0.08);
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-mockup h3 {
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+    .hero-mockup p {
+      font-size: 12px;
+      opacity: 0.8;
+      margin-bottom: 14px;
+    }
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    /* Slit Pupil Animation */
+    @keyframes slitPulse {
+      0%, 100% { transform: scaleX(0.2); opacity: 0.8; }
+      50% { transform: scaleX(1); opacity: 1; }
+    }
+    .slit-scanner {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 3px;
+      border-radius: 3px;
+      animation: scanSweep 3s infinite ease-in-out;
+    }
+    @keyframes scanSweep {
+      0% { left: 10%; opacity: 0.3; }
+      50% { left: 90%; opacity: 1; }
+      100% { left: 10%; opacity: 0.3; }
+    }
+
+    /* Direction-specific styles */
+    /* D1: Obsidian & Amber Gold */
+    .d1 { border-color: #2b3142; }
+    .d1:hover { border-color: #f59e0b; }
+    .d1 .card-tag { color: #f59e0b; }
+    .d1 .preview-box { background: #0a0b0e; }
+    .d1 .hero-mockup { background: #13151d; border-color: #2b3142; font-family: 'Space Grotesk', sans-serif; }
+    .d1 .hero-cta { background: #f59e0b; color: #0a0b0e; }
+    .d1 .hero-cta:hover { background: #fbbf24; }
+
+    /* D2: Chrysoberyl Emerald & Gold */
+    .d2 { border-color: #2a3f36; }
+    .d2:hover { border-color: #eab308; }
+    .d2 .card-tag { color: #34d399; }
+    .d2 .preview-box { background: #080d0c; }
+    .d2 .hero-mockup { background: #0f1714; border-color: #2a3f36; font-family: 'Plus Jakarta Sans', sans-serif; }
+    .d2 .hero-cta { background: #eab308; color: #080d0c; }
+    .d2 .hero-cta:hover { background: #facc15; }
+
+    /* D3: Cyber Topaz & Solar Flare */
+    .d3 { border-color: #2d3244; }
+    .d3:hover { border-color: #ff9f1c; }
+    .d3 .card-tag { color: #b8ff00; }
+    .d3 .preview-box { background: #07080a; }
+    .d3 .hero-mockup { background: #101217; border-color: #2d3244; font-family: 'Outfit', sans-serif; }
+    .d3 .hero-cta { background: #ff9f1c; color: #07080a; }
+    .d3 .hero-cta:hover { background: #ffb74d; }
+
+    .instructions {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    .instructions h4 {
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="header">
+    <div class="badge">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1C3 1 1 6 1 6C1 6 3 11 6 11C9 11 11 6 11 6C11 6 9 1 6 1Z" stroke="currentColor" stroke-width="1.2"/><ellipse cx="6" cy="6" rx="1" ry="4" fill="currentColor"/></svg>
+      Brand Identity Selection
+    </div>
+    <h1>Cat's Eye — Visual Direction Proposals</h1>
+    <p class="subtitle">Review the three distinct design directions for the Cat's Eye rebrand. Each direction centers on the core slit-pupil motif, precision editing mood, and WCAG AA compliance.</p>
+  </header>
+
+  <div class="grid">
+    <!-- DIRECTION 1 -->
+    <div class="card d1">
+      <div class="card-header">
+        <div class="card-tag">Direction 01 • Recommended</div>
+        <h2 class="card-title">Obsidian & Amber Gold</h2>
+        <p class="card-desc">The Nocturnal Director. Deep cinematic darkroom aesthetic letting video content take center stage, guided by an intense amber-gold slit pupil.</p>
+      </div>
+      <div class="preview-box">
+        <!-- SVG LOGO SKETCH 1 -->
+        <svg viewBox="0 0 240 54" width="220" height="50" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="d1_iris" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#FDE68A"/>
+              <stop offset="40%" stop-color="#F59E0B"/>
+              <stop offset="100%" stop-color="#B45309"/>
+            </linearGradient>
+            <filter id="d1_glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2" result="blur"/>
+              <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+            </filter>
+          </defs>
+          <!-- Gemstone Almond Eye Contour -->
+          <g transform="translate(4, 9)">
+            <!-- Outer contour -->
+            <path d="M18 2 C7 2 1 18 1 18 C1 18 7 34 18 34 C29 34 35 18 35 18 C35 18 29 2 18 2 Z" fill="#13151D" stroke="#2B3142" stroke-width="1.5"/>
+            <!-- Iris glow -->
+            <path d="M18 5 C10 5 5 18 5 18 C5 18 10 31 18 31 C26 31 31 18 31 18 C31 18 26 5 18 5 Z" fill="url(#d1_iris)" opacity="0.95"/>
+            <!-- Inner depth shadow -->
+            <ellipse cx="18" cy="18" rx="8" ry="12" fill="#78350F" opacity="0.6"/>
+            <!-- Vertical Slit Pupil -->
+            <path d="M18 6 C15.8 12 15.2 18 15.2 18 C15.2 18 15.8 24 18 30 C20.2 24 20.8 18 20.8 18 C20.8 18 20.2 12 18 6 Z" fill="#0A0B0E"/>
+            <!-- Center slit aperture line -->
+            <line x1="18" y1="7" x2="18" y2="29" stroke="#FEF3C7" stroke-width="0.8" opacity="0.8"/>
+            <!-- Optical flare highlight -->
+            <circle cx="16.5" cy="12" r="1.5" fill="#FFFFFF" opacity="0.9"/>
+            <!-- Precision tick markers (top & bottom) -->
+            <line x1="18" y1="0" x2="18" y2="3" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="18" y1="33" x2="18" y2="36" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+          </g>
+          <!-- Wordmark -->
+          <text x="50" y="34" font-family="'Space Grotesk', sans-serif" font-size="22" font-weight="700" letter-spacing="-0.5px" fill="#F8FAFC">Cat's Eye</text>
+          <rect x="156" y="20" width="46" height="17" rx="3.5" fill="rgba(245,158,11,0.15)" stroke="rgba(245,158,11,0.4)" stroke-width="0.8"/>
+          <text x="163" y="32" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="700" letter-spacing="1px" fill="#F59E0B">STUDIO</text>
+        </svg>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background: #0A0B0E;"></div><span class="swatch-hex">#0A0B0E</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #13151D;"></div><span class="swatch-hex">#13151D</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #2B3142;"></div><span class="swatch-hex">#2B3142</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #F59E0B;"></div><span class="swatch-hex">#F59E0B</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #F8FAFC;"></div><span class="swatch-hex">#F8FAFC</span></div>
+      </div>
+      <div class="specs-list">
+        <div class="spec-item">
+          <span class="spec-label">Typography Pairing</span>
+          <span class="spec-value"><strong>Space Grotesk</strong> (Headings) + <strong>Inter</strong> (UI) + <strong>JetBrains Mono</strong> (Timecodes)</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Slit Motif Usage</span>
+          <span class="spec-value">Amber-gold razor playhead, timeline scanning beam, sharp focus rings</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Sample Hero Interface</span>
+          <div class="hero-mockup">
+            <div class="slit-scanner" style="background: linear-gradient(180deg, #FDE68A, #F59E0B, #78350F);"></div>
+            <h3>Spot the moment worth keeping.</h3>
+            <p>Paste a YouTube URL or drop a podcast recording. Cat's Eye extracts high-hook vertical shorts.</p>
+            <div class="hero-cta">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1v12M1 7h12"/></svg>
+              <span>Paste link or drop video</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTION 2 -->
+    <div class="card d2">
+      <div class="card-header">
+        <div class="card-tag">Direction 02 • Precision Optics</div>
+        <h2 class="card-title">Chrysoberyl Emerald & Gold</h2>
+        <p class="card-desc">The Chatoyant Gemstone. Inspired by true chrysoberyl gemstones with silk-band chatoyancy. Forest graphite, emerald depth, and radiant gold light band.</p>
+      </div>
+      <div class="preview-box">
+        <!-- SVG LOGO SKETCH 2 -->
+        <svg viewBox="0 0 240 54" width="220" height="50" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="d2_gem" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#064E3B"/>
+              <stop offset="50%" stop-color="#047857"/>
+              <stop offset="100%" stop-color="#022C22"/>
+            </linearGradient>
+            <linearGradient id="d2_silk" x1="0" y1="0" x2="0" y2="36" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#FEF08A"/>
+              <stop offset="50%" stop-color="#EAB308"/>
+              <stop offset="100%" stop-color="#A16207"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(4, 9)">
+            <!-- Cabochon contour -->
+            <ellipse cx="18" cy="18" rx="17" ry="16" fill="url(#d2_gem)" stroke="#2A3F36" stroke-width="1.5"/>
+            <!-- Chatoyant silk band -->
+            <path d="M18 3 C13 9 11 18 11 18 C11 18 13 27 18 33 C23 27 25 18 25 18 C25 18 23 9 18 3 Z" fill="url(#d2_silk)" opacity="0.85"/>
+            <!-- Vertical slit aperture -->
+            <path d="M18 5 C16 11 15.5 18 15.5 18 C15.5 18 16 25 18 31 C20 25 20.5 18 20.5 18 C20.5 18 20 11 18 5 Z" fill="#080D0C"/>
+            <line x1="18" y1="6" x2="18" y2="30" stroke="#FEF9C3" stroke-width="0.8"/>
+            <circle cx="15.5" cy="13" r="1.2" fill="#FFFFFF"/>
+            <!-- Compass markers -->
+            <circle cx="18" cy="1" r="1.2" fill="#EAB308"/>
+            <circle cx="18" cy="35" r="1.2" fill="#EAB308"/>
+          </g>
+          <text x="50" y="34" font-family="'Plus Jakarta Sans', sans-serif" font-size="22" font-weight="800" letter-spacing="-0.4px" fill="#F0FDF4">Cat's Eye</text>
+          <rect x="156" y="20" width="46" height="17" rx="3.5" fill="rgba(234,179,8,0.15)" stroke="rgba(234,179,8,0.4)" stroke-width="0.8"/>
+          <text x="163" y="32" font-family="'Plus Jakarta Sans', sans-serif" font-size="9" font-weight="700" letter-spacing="1px" fill="#FACC15">STUDIO</text>
+        </svg>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background: #080D0C;"></div><span class="swatch-hex">#080D0C</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #0F1714;"></div><span class="swatch-hex">#0F1714</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #2A3F36;"></div><span class="swatch-hex">#2A3F36</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #EAB308;"></div><span class="swatch-hex">#EAB308</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #10B981;"></div><span class="swatch-hex">#10B981</span></div>
+      </div>
+      <div class="specs-list">
+        <div class="spec-item">
+          <span class="spec-label">Typography Pairing</span>
+          <span class="spec-value"><strong>Plus Jakarta Sans</strong> (Headings) + <strong>Inter / DM Sans</strong> (UI) + <strong>IBM Plex Mono</strong> (Timecodes)</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Slit Motif Usage</span>
+          <span class="spec-value">Chatoyant silk light sweep, emerald badge accents, dual-tone gemstone cards</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Sample Hero Interface</span>
+          <div class="hero-mockup">
+            <div class="slit-scanner" style="background: linear-gradient(180deg, #FEF08A, #EAB308, #10B981);"></div>
+            <h3>AI Video Intelligence with Surgical Focus.</h3>
+            <p>Chatoyant precision for short-form video creators. Frame-accurate AI moment selection.</p>
+            <div class="hero-cta">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1v12M1 7h12"/></svg>
+              <span>Paste link or drop video</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTION 3 -->
+    <div class="card d3">
+      <div class="card-header">
+        <div class="card-tag">Direction 03 • High-Velocity Viral</div>
+        <h2 class="card-title">Cyber Topaz & Solar Flare</h2>
+        <p class="card-desc">The High-Velocity Viral Studio. Pure pitch black, electric solar amber, and laser neon lime accents for viral peak detection and high-throughput clipping teams.</p>
+      </div>
+      <div class="preview-box">
+        <!-- SVG LOGO SKETCH 3 -->
+        <svg viewBox="0 0 240 54" width="220" height="50" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="d3_amber" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#FFD600"/>
+              <stop offset="60%" stop-color="#FF9F1C"/>
+              <stop offset="100%" stop-color="#E05300"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(4, 9)">
+            <!-- Faceted diamond cut eye -->
+            <polygon points="18,2 34,18 18,34 2,18" fill="#101217" stroke="#2D3244" stroke-width="1.5"/>
+            <!-- Solar flare iris -->
+            <polygon points="18,6 29,18 18,30 7,18" fill="url(#d3_amber)"/>
+            <!-- Laser Slit Pupil -->
+            <rect x="16.5" y="7" width="3" height="22" rx="1.5" fill="#07080A"/>
+            <line x1="18" y1="9" x2="18" y2="27" stroke="#B8FF00" stroke-width="1.2"/>
+            <!-- Corner tech notches -->
+            <circle cx="2" cy="18" r="1.5" fill="#FF9F1C"/>
+            <circle cx="34" cy="18" r="1.5" fill="#FF9F1C"/>
+          </g>
+          <text x="50" y="34" font-family="'Outfit', sans-serif" font-size="23" font-weight="800" letter-spacing="-0.6px" fill="#FFFFFF">CAT'S EYE</text>
+          <rect x="162" y="20" width="44" height="17" rx="3.5" fill="rgba(184,255,0,0.15)" stroke="rgba(184,255,0,0.4)" stroke-width="0.8"/>
+          <text x="168" y="32" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="700" letter-spacing="1px" fill="#B8FF00">PRO</text>
+        </svg>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background: #07080A;"></div><span class="swatch-hex">#07080A</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #101217;"></div><span class="swatch-hex">#101217</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #2D3244;"></div><span class="swatch-hex">#2D3244</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #FF9F1C;"></div><span class="swatch-hex">#FF9F1C</span></div>
+        <div class="swatch"><div class="swatch-color" style="background: #B8FF00;"></div><span class="swatch-hex">#B8FF00</span></div>
+      </div>
+      <div class="specs-list">
+        <div class="spec-item">
+          <span class="spec-label">Typography Pairing</span>
+          <span class="spec-value"><strong>Outfit</strong> (Headings) + <strong>Inter / Geist</strong> (UI) + <strong>Geist Mono</strong> (Timecodes)</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Slit Motif Usage</span>
+          <span class="spec-value">Cyber neon lime virality peak indicators, high-contrast borders, rapid slit pulse loaders</span>
+        </div>
+        <div class="spec-item">
+          <span class="spec-label">Sample Hero Interface</span>
+          <div class="hero-mockup">
+            <div class="slit-scanner" style="background: linear-gradient(180deg, #B8FF00, #FF9F1C, #FF3E3E);"></div>
+            <h3>Cut through the noise. Seize the peak.</h3>
+            <p>Spot every viral hook, punchline, and soundbite with razor-sharp AI detection.</p>
+            <div class="hero-cta">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1v12M1 7h12"/></svg>
+              <span>Paste link or drop video</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="instructions">
+    <h4>Next Step</h4>
+    <p>Choose your preferred direction (<strong>Direction 1: Obsidian & Amber Gold</strong>, <strong>Direction 2: Chrysoberyl Emerald & Gold</strong>, or <strong>Direction 3: Cyber Topaz & Solar Flare</strong>), or request adjustments to any element. Once you choose, we will build out the complete design token system in <code>web/css/tokens.css</code>, components in <code>web/css/components.css</code>, living style guide in <code>web/styleguide.html</code>, and full page redesigns.</p>
+  </div>
+
+</body>
+</html>

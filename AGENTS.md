@@ -47,3 +47,41 @@ A short map for contributors and AI coding assistants.
 - **Pages** are plain HTML, CSS and JavaScript. Keep the existing palette, no shadows, and hover states that
   change colour only.
 - Comments and messages are written in plain language for people who do not program. Keep that tone.
+
+---
+
+## PROJECT RULES: apply to every task
+
+### STACK
+- Python 3.10+, FastAPI, vanilla HTML/CSS/JavaScript with no build step, ffmpeg, yt-dlp, sherpa-onnx, SQLite (local) and PostgreSQL (server).
+- No new framework or heavy dependency without asking. If you want one, write a short justification (what, size, license, alternative considered) and wait.
+
+### AI USAGE
+- All model calls go through `studio/ai.py`. No other file may import a provider SDK or call a provider URL.
+- Every AI-powered feature must have a working no-AI fallback. The product already works with no API key and must keep doing so.
+- Model output is DATA. It is validated against a schema and never interpolated into shell commands, ffmpeg arguments, file paths or SQL.
+- Provider capabilities (JSON mode, image input, context size) are looked up, never assumed.
+
+### SAFETY AND ISOLATION
+- User identity comes from the session only, never from request bodies or paths.
+- Every file path derived from user input is normalized and checked to stay inside the user's data folder.
+- Uploads: validate type with ffprobe/magic bytes, cap size, sanitize names.
+- Text from videos, transcripts and filenames is untrusted when shown in the UI (escape it) and when sent to an AI (treated as data).
+
+### CHANGE DISCIPLINE
+- Every new feature sits behind a flag documented in `.env.example`, default OFF until its phase is merged and verified.
+- DB changes are additive migrations that work on SQLite and PostgreSQL. Never drop or rewrite existing columns.
+- The existing pipeline keeps working untouched until a replacement is proven side by side.
+- No drive-by refactors. Unrelated cleanup goes in a separate commit or is listed under known gaps.
+
+### CONVENTIONS
+- All timestamps are float seconds in source-video time, handled by one helper module (`studio/timeutil.py` or the audit's equivalent). Never store frame numbers as the primary time.
+- Heavy work goes through the existing queue and respects its CPU/RAM/disk checks.
+- Long videos: stream and chunk, never load all frames or the full audio into memory.
+- Logging is structured and never contains API keys, tokens or full transcripts.
+
+### DEFINITION OF DONE
+- `python tests/run.py` passes with no API keys and no network.
+- New behavior has tests, including at least one failure-path test.
+- `.env.example` and README sections updated for new flags.
+- Final message contains: summary, files changed, how to test manually, known gaps, decisions made.

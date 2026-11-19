@@ -245,14 +245,26 @@ def _parse(text):
 
 
 # ---------------------------------------------------------------- one call
-def call(model: str, prompt: str, schema: dict):
+def call(model: str, prompt: str, schema: dict, images: list = None):
     """Ask one model. Returns (the parsed JSON answer, tokens sent, tokens written back)."""
     how = PROVIDERS[provider()][2]
-    return {"gemini": _gemini, "openai": _openai, "anthropic": _anthropic}[how](model, prompt, schema)
+    fn = {"gemini": _gemini, "openai": _openai, "anthropic": _anthropic}[how]
+    if images:
+        try:
+            return fn(model, prompt, schema, images=images)
+        except Exception:
+            pass  # if multimodal fails (unsupported by model), fall back to text
+    return fn(model, prompt, schema)
 
 
-def _gemini(model, prompt, schema):
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+def _gemini(model, prompt, schema, images=None):
+    parts = [{"text": prompt}]
+    if images:
+        for img in images:
+            mime = img.get("mime", "image/jpeg") if isinstance(img, dict) else "image/jpeg"
+            data = img.get("data", img) if isinstance(img, dict) else img
+            parts.append({"inlineData": {"mimeType": mime, "data": data}})
+    body = {"contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json", "responseSchema": schema}}
     r = httpx.post(f"{base_url()}/{model}:generateContent", json=body, headers={"x-goog-api-key": key()}, timeout=120)
     if r.status_code != 200:
@@ -264,9 +276,17 @@ def _gemini(model, prompt, schema):
     return json.loads(text), sent, max(0, int(u.get("totalTokenCount") or 0) - sent)   # the answer, and any thinking billed with it
 
 
-def _openai(model, prompt, schema):
+def _openai(model, prompt, schema, images=None):
     headers = {"Authorization": f"Bearer {key()}"} if key() else {}
-    body = {"model": model, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
+    if images:
+        content = [{"type": "text", "text": _wrapped(prompt, schema)}]
+        for img in images:
+            mime = img.get("mime", "image/jpeg") if isinstance(img, dict) else "image/jpeg"
+            data = img.get("data", img) if isinstance(img, dict) else img
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}})
+        body = {"model": model, "messages": [{"role": "user", "content": content}]}
+    else:
+        body = {"model": model, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
     # Most services accept these two extras; a few models refuse one of them, so they are dropped on a refusal.
     extras = [{"temperature": 0.4, "response_format": {"type": "json_object"}}, {"response_format": {"type": "json_object"}}, {}]
     r = None
@@ -281,8 +301,17 @@ def _openai(model, prompt, schema):
     return _parse(data["choices"][0]["message"].get("content")), int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
 
 
-def _anthropic(model, prompt, schema):
-    body = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
+def _anthropic(model, prompt, schema, images=None):
+    if images:
+        content = []
+        for img in images:
+            mime = img.get("mime", "image/jpeg") if isinstance(img, dict) else "image/jpeg"
+            data = img.get("data", img) if isinstance(img, dict) else img
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}})
+        content.append({"type": "text", "text": _wrapped(prompt, schema)})
+        body = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": content}]}
+    else:
+        body = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}]}
     r = httpx.post(f"{base_url()}/messages", json=body, timeout=180,
                    headers={"x-api-key": key(), "anthropic-version": "2023-06-01"})
     if r.status_code != 200:

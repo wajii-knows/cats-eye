@@ -107,7 +107,7 @@ _by_user: dict = {}                       # user -> {job id: job}: listing one p
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
+DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "multishot", "quality": 720,
             "range_start": None, "range_end": None}
 
 
@@ -356,6 +356,10 @@ def request_render(jid, cid, changes: dict):
         new["style"] = DEFAULTS["style"]
     if new.get("layout") not in render.LAYOUTS:
         new["layout"] = DEFAULTS["layout"]
+    if "shots" in changes and isinstance(changes["shots"], list):
+        new["shots"] = brain.plan_multishots(new["start"], new["end"], shots_input=changes["shots"])
+    elif "start" in changes or "end" in changes:
+        new["shots"] = brain.plan_multishots(new["start"], new["end"], shots_input=clip.get("shots"))
     clip.update(new, status="queued")
     save(job)
     _q.put(("clip", jid, cid))
@@ -371,6 +375,8 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        if clip.get("shots"):
+            local["shots"] = [dict(s, start=round(s["start"] - off, 2), end=round(s["end"] - off, 2)) for s in clip["shots"]]
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
         if clip.get("fixed_for") == span and clip.get("fixed_words") and not any(
                 roman.needs_roman(w.get("w", "")) for w in clip["fixed_words"]):
@@ -388,7 +394,7 @@ def render_one(job, clip, words):
         near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(raw)]
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
-        post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
+        post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score", "shots") if k in clip}
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
         if clip["version"] == 1:
             clip.setdefault("made_at", time.time())
@@ -663,13 +669,27 @@ def _run_job(job):
             continue
         quota = max(1, math.ceil(left / (len(blocks) - bi)))
         s0 = int((a - lo) / 16000)
+        snaps = None
+        v_path = job.get("source_path") or (vstate.get("path") if "path" in vstate else None)
+        if not v_path and src.get("type") == "file":
+            v_path = src.get("path")
+        if v_path and Path(v_path).is_file():
+            try:
+                snaps_dir = d / "snapshots" / f"block_{bi}"
+                snaps = media.extract_snapshots(Path(v_path), snaps_dir, start=a / 16000, end=b / 16000,
+                                                interval_sec=4.0, max_snapshots=20)
+            except Exception:
+                snaps = None
         found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
-                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append)
+                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append,
+                                     snapshots=snaps)
         tokens += ai.get("tokens", 0)
         model = ai.get("model") or model
         if ai.get("note"):
             notes.append(ai["note"])
         for c in found:
+            if c.get("shots"):
+                c["shots"] = [dict(s, start=round(s["start"] + shift, 2), end=round(s["end"] + shift, 2)) for s in c["shots"]]
             c.update(id=f"clip{len(job['clips']) + 1:02d}", start=round(c["start"] + shift, 2),
                      end=round(c["end"] + shift, 2), style=o["style"], layout=o["layout"], status="queued", version=0)
             job["clips"].append(c)

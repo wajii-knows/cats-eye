@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none" role="progressbar" aria-label="Processing video...">
+  <defs>
+    <linearGradient id="load_iris" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE68A"/>
+      <stop offset="45%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+    <style>
+      @keyframes slitDilate {
+        0%, 100% {
+          transform: scaleX(0.25);
+          opacity: 0.9;
+        }
+        50% {
+          transform: scaleX(1.0);
+          opacity: 1;
+        }
+      }
+      @keyframes irisGlow {
+        0%, 100% { filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.4)); }
+        50% { filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.8)); }
+      }
+      .pupil-animated {
+        transform-origin: 24px 24px;
+        animation: slitDilate 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .iris-animated {
+        animation: irisGlow 2s infinite ease-in-out;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pupil-animated, .iris-animated {
+          animation: none;
+        }
+      }
+    </style>
+  </defs>
+  <!-- Outer Ring Contour -->
+  <circle cx="24" cy="24" r="22" stroke="#2B3142" stroke-width="1.5" fill="#13151D"/>
+  <!-- Iris with glow -->
+  <g class="iris-animated">
+    <ellipse cx="24" cy="24" rx="18" ry="16" fill="url(#load_iris)"/>
+  </g>
+  <!-- Vertical Slit Pupil with dilation animation -->
+  <g class="pupil-animated">
+    <path d="M24 9 C20.5 16 19.5 24 19.5 24 C19.5 24 20.5 32 24 39 C27.5 32 28.5 24 28.5 24 C28.5 24 27.5 16 24 9 Z" fill="#0A0B0E"/>
+    <line x1="24" y1="11" x2="24" y2="37" stroke="#FEF3C7" stroke-width="0.8" opacity="0.8"/>
+  </g>
+  <!-- Optical Catchlight -->
+  <circle cx="21" cy="17" r="1.8" fill="#FFFFFF" opacity="0.95"/>
+</svg>

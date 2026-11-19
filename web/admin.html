@@ -4,25 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>PeakCut Admin</title>
+<title>Cat's Eye Admin</title>
 <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/components.css">
 <style>
 :root{
-  --brand:#FF8B33;--brand-press:#F27A1F;--brand-ink:#2A1A12;--brand-soft:#FFF2E8;--brand-line:#FFD9BC;--brand-deep:#A9480A;
-  --frame:#1E1612;--frame-2:#2C221D;--frame-line:rgba(255,255,255,.08);--frame-text:#F4EEEA;--frame-dim:#A99A91;
-  --bg:#FFFFFF;--muted:#F7F4F1;--line:#EEE8E4;--line-2:#E1D9D3;
-  --text:#211813;--dim:#6D6159;--faint:#A0948C;
-  --good:#0F8A57;--good-soft:#E6F6EE;--bad:#D3343F;--bad-soft:#FDECEE;
+  --brand:#F59E0B;--brand-press:#FBBF24;--brand-ink:#0A0B0E;--brand-soft:rgba(245,158,11,0.14);--brand-line:rgba(245,158,11,0.35);--brand-deep:#D97706;
+  --frame:#0A0B0E;--frame-2:#13151D;--frame-line:rgba(255,255,255,0.08);--frame-text:#F8FAFC;--frame-dim:#94A3B8;
+  --bg:#13151D;--muted:#1B1E29;--line:#2B3142;--line-2:#3F475E;
+  --text:#F8FAFC;--dim:#94A3B8;--faint:#475569;
+  --good:#10B981;--good-soft:rgba(16,185,129,0.12);--bad:#EF4444;--bad-soft:rgba(239,68,68,0.15);
   --r-lg:16px;--r:12px;--r-sm:8px;
-  color-scheme:light;
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%}
-body{margin:0;background:var(--frame);color:var(--text);font:14px/1.5 "Geist","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+body{margin:0;background:var(--frame);color:var(--text);font:14px/1.5 "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
 h1,h2,h3,h4,p{margin:0}
 button,input,select,textarea{font:inherit;color:inherit}
 svg{width:18px;height:18px;flex:none;fill:currentColor}
@@ -164,7 +163,7 @@ dialog::backdrop{background:rgba(14,12,11,.42)}
 <body>
 <div class="app">
   <aside class="side" aria-label="Sidebar">
-    <div class="side-head"><img class="logo" src="/brand/logo-light.svg" alt="PeakCut"></div>
+    <div class="side-head"><img class="logo" src="/brand/logo-light.svg" alt="Cat's Eye"></div>
     <nav class="nav" id="nav" aria-label="Admin"></nav>
     <div class="side-foot" id="foot"></div>
   </aside>
@@ -216,7 +215,7 @@ function toast(msg, kind = "") {
 }
 
 const S = {tab:"overview", data:null, me:null, q:"", filter:"all", sort:"created_at", fb:null, fbStatus:"new"};
-const TABS = {overview:["Overview", "home", "Sign-ups, videos and AI use across this PeakCut server."],
+const TABS = {overview:["Overview", "home", "Sign-ups, videos and AI use across this Cat's Eye server."],
               users:["Users", "users", "Every account. Open one to see how much it uses the AI."],
               feedback:["Feedback", "chat", "Bug reports, feature ideas and other messages from users."],
               activity:["Activity", "clock", "Everything admins have done, newest first."]};
@@ -321,7 +320,7 @@ function drawFeedback() {
       <p class="fbmsg">${esc(x.message)}</p>${x.context ? `<p class="fbctx">${esc(x.context)}</p>` : ""}
       <div class="row">${x.status !== "seen" ? `<button class="btn sm" data-act="fbset" data-id="${x.id}" data-s="seen">Mark seen</button>` : ""}
         ${x.status !== "done" ? `<button class="btn sm" data-act="fbset" data-id="${x.id}" data-s="done">${ic("check")}Done</button>` : `<button class="btn sm" data-act="fbset" data-id="${x.id}" data-s="new">Reopen</button>`}
-        ${x.email ? `<a class="btn sm" href="mailto:${esc(x.email)}?subject=${encodeURIComponent("About your PeakCut feedback")}">Reply by email</a>` : ""}</div></div>`).join("")
+        ${x.email ? `<a class="btn sm" href="mailto:${esc(x.email)}?subject=${encodeURIComponent("About your Cat's Eye feedback")}">Reply by email</a>` : ""}</div></div>`).join("")
       : `<div class="card"><div class="empty"><b>Nothing here</b>${S.fbStatus === "new" ? "No new messages. Everything has been looked at." : "Messages appear here as users send them."}</div></div>`}`;
 }
 async function loadFeedback() {

@@ -78,7 +78,12 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
-LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)"}
+LAYOUTS = {
+    "multishot": "Multishot (dynamic cuts)",
+    "blur": "Full frame + blurred fill",
+    "zoom": "Zoomed in + blurred fill",
+    "crop": "Fill the screen (centre crop)",
+}
 
 
 def _ts(t):
@@ -110,10 +115,10 @@ def _groups(words, per):
 
 def geometry(src_w, src_h, layout):
     """Where the video sits in the 1080x1920 frame, and where hook and captions go."""
-    if src_h >= src_w and layout != "crop":
+    if src_h >= src_w and layout not in ("crop", "multishot"):
         layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
-    if layout == "blur":
-        fg_h = min(H, int(round(W * src_h / src_w / 2)) * 2)
+    if layout in ("blur", "multishot"):
+        fg_h = min(H, int(round(W * src_h / src_w / 2)) * 2) if (src_w and src_h) else int(W * 9 / 16)
     elif layout == "zoom":
         fg_h = 1000
     else:
@@ -237,6 +242,96 @@ def _filter(layout, fg_h):
             f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v0];")
 
 
+def _multishot_filter(shots, fg_h, dur, src_w, src_h):
+    """FFmpeg filter graph to switch camera shots / framings dynamically across the clip."""
+    dur = max(0.5, float(dur))
+    clean = []
+    if shots and isinstance(shots, list):
+        for s in shots:
+            if not isinstance(s, dict):
+                continue
+            st = max(0.0, min(dur, float(s.get("start", 0.0))))
+            en = max(0.0, min(dur, float(s.get("end", dur))))
+            typ = str(s.get("type", "wide")).lower()
+            if typ not in ("wide", "close", "crop", "zoom", "split"):
+                typ = "wide"
+            if en - st >= 0.4:
+                clean.append({"start": st, "end": en, "type": typ})
+    if not clean:
+        count = max(2, min(8, int(round(dur / 4.0))))
+        step = dur / count
+        pats = ["wide", "close", "zoom", "close", "crop", "wide"]
+        for i in range(count):
+            clean.append({"start": i * step, "end": min(dur, (i + 1) * step), "type": pats[i % len(pats)]})
+
+    clean.sort(key=lambda s: s["start"])
+    tiled = []
+    cur = 0.0
+    for s in clean:
+        if s["start"] > cur + 0.1:
+            tiled.append({"start": cur, "end": s["start"], "type": "wide"})
+        tiled.append(s)
+        cur = max(cur, s["end"])
+    if cur < dur - 0.1:
+        tiled.append({"start": cur, "end": dur, "type": "close" if tiled else "wide"})
+
+    clean = [s for s in tiled if s["end"] - s["start"] >= 0.3]
+    if not clean:
+        return _filter("blur", fg_h)
+
+    if len(clean) == 1:
+        st = clean[0]["type"]
+        if st == "crop":
+            return _filter("crop", fg_h)
+        if st == "zoom":
+            return _filter("zoom", 1000)
+        return _filter("blur", fg_h)
+
+    N = len(clean)
+    fc = [f"[0:v]fps={config.OUT_FPS},split={N}" + "".join(f"[in{i}]" for i in range(N)) + ";"]
+    is_vert = (src_h >= src_w) if (src_w and src_h) else False
+
+    for i, s in enumerate(clean):
+        t0, t1, stype = s["start"], s["end"], s["type"]
+        trim = f"[in{i}]trim=start={t0:.2f}:end={t1:.2f},setpts=PTS-STARTPTS"
+        if is_vert:
+            if stype == "close":
+                fc.append(f"{trim},scale={int(W*1.3/2)*2}:{int(H*1.3/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+            elif stype == "zoom":
+                fc.append(f"{trim},scale={int(W*1.15/2)*2}:{int(H*1.15/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+            else:
+                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+        else:
+            if stype == "crop":
+                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+            elif stype == "close":
+                ch = min(H, int(round(fg_h * 1.36 / 2)) * 2)
+                fc.append(f"{trim},split=2[cb{i}][cf{i}];"
+                          f"[cb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[cbg{i}];"
+                          f"[cf{i}]scale={int(W*1.36/2)*2}:{ch}:force_original_aspect_ratio=increase,crop={W}:{ch}[cfg{i}];"
+                          f"[cbg{i}][cfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
+            elif stype == "zoom":
+                fc.append(f"{trim},split=2[zb{i}][zf{i}];"
+                          f"[zb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[zbg{i}];"
+                          f"[zf{i}]scale={W}:1000:force_original_aspect_ratio=increase,crop={W}:1000[zfg{i}];"
+                          f"[zbg{i}][zfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
+            elif stype == "split":
+                half_h = H // 2
+                fc.append(f"{trim},split=2[spt{i}][spb{i}];"
+                          f"[spt{i}]scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[spt_t{i}];"
+                          f"[spb{i}]scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[spb_b{i}];"
+                          f"[spt_t{i}][spb_b{i}]vstack,setsar=1[v{i}_p];")
+            else:  # wide / blur
+                fc.append(f"{trim},split=2[wb{i}][wf{i}];"
+                          f"[wb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[wbg{i}];"
+                          f"[wf{i}]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[wfg{i}];"
+                          f"[wbg{i}][wfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
+
+    concat_in = "".join(f"[v{i}_p]" for i in range(N))
+    fc.append(f"{concat_in}concat=n={N}:v=1:a=0,setsar=1[v0];")
+    return "".join(fc)
+
+
 _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
 
@@ -248,25 +343,37 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
     ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
                     clip.get("highlight_words", []), hook_y, cap_y)
+    shots = clip.get("shots") or []
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, shots=shots, src_w=src_w, src_h=src_h)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str) -> dict:
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
+               shots: list = None, src_w: int = 0, src_h: int = 0) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
+    dur = end - start
+    if layout == "multishot" or (shots and len(shots) > 1 and layout not in ("crop", "zoom")):
+        rel_shots = []
+        for s in (shots or []):
+            if isinstance(s, dict):
+                rel_shots.append({"start": float(s.get("start", start)) - start,
+                                  "end": float(s.get("end", end)) - start,
+                                  "type": s.get("type", "wide")})
+        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    else:
+        fc = _filter(layout, fg_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
     encoders = []
