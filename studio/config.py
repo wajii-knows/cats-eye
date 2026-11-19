@@ -117,6 +117,17 @@ def _data_folder():
 
 
 DATA_DIR, DATA_FROM = _data_folder()
+COLAB_MODE = env("PEAKCUT_COLAB", "0").lower() in ("1", "true", "yes", "on")
+WORK_DIR = Path(env("PEAKCUT_WORK_DIR") or (Path("/content/cats_eye_work") if COLAB_MODE and Path("/content").exists() else DATA_DIR))
+DURABLE_DIR = Path(env("PEAKCUT_DURABLE_DIR") or (Path("/content/drive/MyDrive/CatsEye") if COLAB_MODE and Path("/content/drive").exists() else DATA_DIR))
+
+if COLAB_MODE:
+    DATA_DIR = WORK_DIR
+
+OWNER_PASSWORD = env("PEAKCUT_OWNER_PASSWORD", "")
+DRIVE_MIN_FREE_GB = float(env("PEAKCUT_DRIVE_MIN_FREE_GB", "3.0"))
+DB_CHECKPOINT_INTERVAL_SEC = float(env("PEAKCUT_DB_CHECKPOINT_INTERVAL_SEC", "30.0"))
+
 USERS_DIR = DATA_DIR / "users"          # users/<user id>/{creators,jobs,accounts}
 MODELS_DIR = Path(env("PEAKCUT_MODELS") or DATA_DIR / "models")
 TMP_DIR = DATA_DIR / "tmp"

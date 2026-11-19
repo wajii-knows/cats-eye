@@ -1,0 +1,454 @@
+"""Comprehensive test suite for Cat's Eye Google Colab Durable Source of Truth:
+1. Feature flag PEAKCUT_COLAB and normal-mode equivalence.
+2. Verified write protocol: temp file -> fsync -> readback sha256 -> rename -> manifest.
+3. Fault injection: crash before sync, crash before rename, absence rule, and read corruption detection.
+4. Packed directory (.tar) roundtrip for small files (snapshots, frames, JSON).
+5. Session lease concurrency: active rejection, heartbeat, stale takeover (>3 min), force takeover.
+6. Multi-generation SQLite online backup, PRAGMA integrity check, sessions sanitization, and 5-gen retention.
+7. Corrupt generation fallback (corrupt gen 5 falls back to gen 4).
+8. Durable uploader queue: background worker, pending bytes/count metrics, safe-to-disconnect state.
+9. Intra-stage checkpointing and resume (transcribe 5-min chunks).
+10. Secrets absence: verify no API keys or plaintext credentials exist in durable store.
+11. Colab server gate: OWNER_PASSWORD enforcement, rate-limited login, and Colab status API.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from studio import config, flags
+from studio.storage.colab import ColabManager, get_colab_manager, set_colab_manager
+from studio.storage.durable import (
+    DriveMountStore,
+    DurableStoreError,
+    FaultInjectingStore,
+    IntegrityError,
+    LocalFolderStore,
+    compute_sha256,
+)
+from studio.storage.lease import ActiveLeaseError, SessionLease
+from studio.storage.db_checkpoint import DatabaseCheckpointManager
+from studio.storage.uploader import DurableUploader, UploadTask
+from studio.pipeline.stage import StageContext
+from studio.pipeline.artifacts import ArtifactStore
+
+
+def run_all_tests():
+    fails = []
+
+    def check(name: str, ok: bool, extra: str = ""):
+        status = "PASS" if ok else "FAIL"
+        print(f"{status} {name}" + (f"   {extra}" if extra else ""))
+        if not ok:
+            fails.append(name)
+
+    print("\n=== 1. Feature Flag & Normal Mode Equivalence ===")
+    all_f = flags.all_flags()
+    check("PEAKCUT_COLAB flag registered", "PEAKCUT_COLAB" in all_f)
+    check("PEAKCUT_COLAB default is OFF", flags.is_on("PEAKCUT_COLAB") is False)
+
+    # Verify normal mode equivalence
+    orig_colab = os.environ.get("PEAKCUT_COLAB")
+    try:
+        os.environ.pop("PEAKCUT_COLAB", None)
+        # Reload relevant config
+        from studio import config as test_cfg
+
+        check("In non-Colab mode, COLAB_MODE is False", test_cfg.COLAB_MODE is False)
+        check("In non-Colab mode, WORK_DIR equals DATA_DIR", test_cfg.WORK_DIR == test_cfg.DATA_DIR)
+        check("In non-Colab mode, DURABLE_DIR equals DATA_DIR", test_cfg.DURABLE_DIR == test_cfg.DATA_DIR)
+    finally:
+        if orig_colab is not None:
+            os.environ["PEAKCUT_COLAB"] = orig_colab
+
+    print("\n=== 2. Verified Write Protocol & Fault Injection ===")
+    with tempfile.TemporaryDirectory(prefix="test_durable_") as tmp_dur, tempfile.TemporaryDirectory(
+        prefix="test_work_"
+    ) as tmp_work:
+        durable_dir = Path(tmp_dur)
+        work_dir = Path(tmp_work)
+
+        # Create a local test file
+        src_file = work_dir / "sample.mp4"
+        src_content = b"CAT_EYE_DURABLE_SAMPLE_VIDEO_DATA" * 100
+        src_file.write_bytes(src_content)
+        expected_sha = compute_sha256(src_file)
+
+        store = LocalFolderStore(durable_dir, session_id="test_sess_1")
+        meta = store.put_file(src_file, "videos/job_101/sample.mp4")
+
+        check("Put file returns verified metadata", bool(meta and meta["sha256"] == expected_sha))
+        check("Put file exists in store", store.exists("videos/job_101/sample.mp4"))
+        check("Manifest contains file entry", "videos/job_101/sample.mp4" in store._manifest.get("files", {}))
+
+        # Absence Rule: a file present on disk but absent in manifest is considered absent
+        ghost_path = durable_dir / "videos" / "job_101" / "ghost.txt"
+        ghost_path.parent.mkdir(parents=True, exist_ok=True)
+        ghost_path.write_text("untracked ghost file", encoding="utf-8")
+        check("Absence Rule: untracked file returns exists()=False", store.exists("videos/job_101/ghost.txt") is False)
+
+        # Fault Injection: Drop writes (network timeout or crash before sync)
+        base_dur = LocalFolderStore(durable_dir, session_id="test_fault_1")
+        fault_store = FaultInjectingStore(base_dur)
+        fault_store.drop_writes = True
+        crashed = False
+        try:
+            fault_store.put_file(src_file, "videos/crashed_sync.mp4")
+        except DurableStoreError:
+            crashed = True
+        check("Crash before sync raises DurableStoreError", crashed)
+        check("Crash before sync leaves no entry in manifest", not fault_store.exists("videos/crashed_sync.mp4"))
+
+        # Fault Injection: Crash before rename
+        fault_store.drop_writes = False
+        fault_store.crash_before_rename = True
+        crashed = False
+        try:
+            fault_store.put_file(src_file, "videos/crashed_rename.mp4")
+        except DurableStoreError:
+            crashed = True
+        check("Crash before rename raises DurableStoreError", crashed)
+        check("Crash before rename leaves target non-existent", not (durable_dir / "videos/crashed_rename.mp4").exists())
+        check("Crash before rename leaves no manifest entry", not fault_store.exists("videos/crashed_rename.mp4"))
+
+        # Fault Injection: Crash before manifest commit
+        fault_store.crash_before_rename = False
+        fault_store.crash_before_manifest_commit = True
+        crashed = False
+        try:
+            fault_store.put_file(src_file, "videos/crashed_manifest.mp4")
+        except DurableStoreError:
+            crashed = True
+        check("Crash before manifest commit raises DurableStoreError", crashed)
+        check("Absence rule: file on disk without manifest is absent", not fault_store.exists("videos/crashed_manifest.mp4"))
+
+        # Read-back verification and corruption detection
+        fault_store.crash_before_manifest_commit = False
+        corrupt_meta = fault_store.put_file(src_file, "videos/to_corrupt.mp4")
+        real_file = durable_dir / "videos/to_corrupt.mp4"
+        # Tamper with the file on durable storage
+        real_file.write_bytes(b"TAMPERED_BYTES_CORRUPTED")
+        read_failed = False
+        try:
+            dest_read = work_dir / "restored.mp4"
+            fault_store.get_file("videos/to_corrupt.mp4", dest_read)
+        except IntegrityError:
+            read_failed = True
+        check("Tampered durable file triggers IntegrityError on read", read_failed)
+
+    print("\n=== 3. Directory Packing (.tar) Round-trip ===")
+    with tempfile.TemporaryDirectory(prefix="test_pack_") as tmp_pack:
+        pack_dir = Path(tmp_pack)
+        local_frames = pack_dir / "frames"
+        local_frames.mkdir()
+        for i in range(25):
+            (local_frames / f"frame_{i:03d}.png").write_bytes(f"PNG_DATA_{i}".encode() * 50)
+        (local_frames / "sub").mkdir()
+        (local_frames / "sub" / "meta.json").write_text('{"count": 25}', encoding="utf-8")
+
+        dur_store = LocalFolderStore(pack_dir / "durable")
+        dur_store.put_dir_packed(local_frames, "artifacts/snapshots/pack.tar")
+
+        check("Packed archive exists on durable store", dur_store.exists("artifacts/snapshots/pack.tar"))
+        check("Archive file is single tar file", (pack_dir / "durable" / "artifacts/snapshots/pack.tar").is_file())
+
+        unpack_dest = pack_dir / "unpacked"
+        dur_store.get_dir_unpacked("artifacts/snapshots/pack.tar", unpack_dest)
+
+        check("Unpacked directory contains all 25 frames", len(list(unpack_dest.glob("frame_*.png"))) == 25)
+        check(
+            "Unpacked sub/meta.json matches original",
+            (unpack_dest / "sub" / "meta.json").read_text(encoding="utf-8") == '{"count": 25}',
+        )
+
+    print("\n=== 4. Session Lease Concurrency & Timeout ===")
+    with tempfile.TemporaryDirectory(prefix="test_lease_") as tmp_l:
+        l_dir = Path(tmp_l)
+        lease_a = SessionLease(l_dir, session_id="session_alpha", heartbeat_interval=0.2)
+        res_a = lease_a.acquire()
+        check("Lease A acquired successfully", res_a["session_id"] == "session_alpha")
+        check("Lease file created", (l_dir / "lease.json").is_file())
+
+        # Second session attempts acquisition while Lease A is active (< 3 minutes)
+        lease_b = SessionLease(l_dir, session_id="session_beta")
+        b_blocked = False
+        try:
+            lease_b.acquire()
+        except ActiveLeaseError:
+            b_blocked = True
+        check("Active lease rejects second session (ActiveLeaseError)", b_blocked)
+
+        # Force takeover
+        res_b_forced = lease_b.acquire(force=True)
+        check("Force takeover succeeds", res_b_forced["session_id"] == "session_beta")
+
+        # Stale takeover: simulate lease older than 180 seconds
+        lease_a.stop_heartbeat()
+        lease_file = l_dir / "lease.json"
+        stale_data = {
+            "session_id": "session_old",
+            "created_at": time.time() - 500,
+            "last_heartbeat": time.time() - 300,  # 5 minutes ago
+            "hostname": "old-colab-worker",
+        }
+        lease_file.write_text(json.dumps(stale_data), encoding="utf-8")
+
+        lease_c = SessionLease(l_dir, session_id="session_gamma")
+        res_c = lease_c.acquire()
+        check("Stale lease (> 3 minutes) taken over automatically", res_c["session_id"] == "session_gamma")
+
+        # Clean release
+        released = lease_c.release()
+        check("Lease released cleanly", released is True)
+
+    print("\n=== 5. SQLite Online Backup, Integrity Check & 5-Gen Retention ===")
+    with tempfile.TemporaryDirectory(prefix="test_db_") as tmp_d:
+        d_dir = Path(tmp_d)
+        work_db = d_dir / "work" / "peakcut.db"
+        work_db.parent.mkdir(parents=True, exist_ok=True)
+        dur_dir = d_dir / "durable"
+
+        # Initialize test SQLite database with tables
+        conn = sqlite3.connect(str(work_db))
+        conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT);")
+        conn.execute("CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id TEXT);")
+        conn.execute("CREATE TABLE stage_runs (id TEXT PRIMARY KEY, status TEXT);")
+        conn.execute("INSERT INTO users VALUES ('u1', 'Owner User');")
+        conn.execute("INSERT INTO sessions VALUES ('secret_session_token_123', 'u1');")
+        conn.execute("INSERT INTO stage_runs VALUES ('sr1', 'done');")
+        conn.commit()
+        conn.close()
+
+        dur_store = LocalFolderStore(dur_dir)
+        db_mgr = DatabaseCheckpointManager(
+            work_db_path=work_db,
+            durable_store=dur_store,
+            max_generations=5,
+            checkpoint_interval=1.0,
+        )
+
+        # Generate 6 checkpoints to test generation increment and 5-generation retention
+        for i in range(1, 7):
+            res = db_mgr.create_checkpoint(reason=f"test_run_{i}")
+            check(f"Checkpoint gen-{i} created", res is not None and res["generation"] == i)
+
+        gens = db_mgr.get_generations()
+        check("Generations trimmed to max 5 (retention rule)", len(gens) == 5 and gens == [2, 3, 4, 5, 6])
+        check("Earliest generation gen-1 was pruned", not dur_store.exists("db/gen-0001.sqlite"))
+        check("Latest generation gen-6 exists", dur_store.exists("db/gen-0006.sqlite"))
+
+        # Verify session sanitization in snapshot
+        snap_tmp = d_dir / "snap_inspect.sqlite"
+        dur_store.get_file("db/gen-0006.sqlite", snap_tmp)
+        snap_conn = sqlite3.connect(str(snap_tmp))
+        cur = snap_conn.cursor()
+        users_count = cur.execute("SELECT COUNT(*) FROM users;").fetchone()[0]
+        sessions_count = cur.execute("SELECT COUNT(*) FROM sessions;").fetchone()[0]
+        snap_conn.close()
+
+        check("Snapshot preserves user data", users_count == 1)
+        check("Snapshot sanitizes sessions table (zero sessions stored on Drive)", sessions_count == 0)
+
+    print("\n=== 6. Corrupt Generation Fallback ===")
+    with tempfile.TemporaryDirectory(prefix="test_fallback_") as tmp_fb:
+        fb_dir = Path(tmp_fb)
+        work_db = fb_dir / "work" / "peakcut.db"
+        work_db.parent.mkdir(parents=True, exist_ok=True)
+        dur_dir = fb_dir / "durable"
+
+        # Create base DB and 2 checkpoints
+        conn = sqlite3.connect(str(work_db))
+        conn.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT);")
+        conn.execute("INSERT INTO kv VALUES ('gen', '1');")
+        conn.commit()
+        conn.close()
+
+        dur_store = LocalFolderStore(dur_dir)
+        db_mgr = DatabaseCheckpointManager(work_db, dur_store, max_generations=5)
+        db_mgr.create_checkpoint(reason="gen1")
+
+        # Update and make gen 2
+        conn = sqlite3.connect(str(work_db))
+        conn.execute("UPDATE kv SET v = '2';")
+        conn.commit()
+        conn.close()
+        db_mgr.create_checkpoint(reason="gen2")
+
+        # Now simulate corruption of gen-2 on durable storage
+        gen2_file = dur_dir / "db/gen-0002.sqlite"
+        gen2_file.write_bytes(b"NOT_A_VALID_SQLITE_DATABASE_CORRUPTED_BYTES")
+
+        # Delete local DB and restore
+        import gc
+        gc.collect()
+        time.sleep(0.05)
+        work_db.unlink()
+        restored_meta = db_mgr.restore_latest_checkpoint()
+
+        check(
+            "Corruption in gen-2 triggered automatic fallback to gen-1",
+            restored_meta is not None and restored_meta["generation"] == 1,
+        )
+        check("Restored local DB exists", work_db.is_file())
+
+        conn = sqlite3.connect(str(work_db))
+        val = conn.execute("SELECT v FROM kv WHERE k = 'gen';").fetchone()[0]
+        conn.close()
+        del conn
+        gc.collect()
+        check("Data restored correctly from fallback generation 1", val == "1")
+
+    print("\n=== 7. Durable Uploader Background Queue & Metrics ===")
+    with tempfile.TemporaryDirectory(prefix="test_up_") as tmp_u:
+        u_dir = Path(tmp_u)
+        d_store = LocalFolderStore(u_dir / "durable")
+        uploader = DurableUploader(d_store, max_workers=2)
+
+        file1 = u_dir / "upload1.txt"
+        file1.write_bytes(b"HELLO_UPLOADER_1" * 100)
+        file2 = u_dir / "upload2.txt"
+        file2.write_bytes(b"HELLO_UPLOADER_2" * 200)
+
+        uploader.enqueue_file(file1, "queue/file1.txt")
+        uploader.enqueue_file(file2, "queue/file2.txt")
+
+        status_queued = uploader.get_status()
+        check("Uploader tracks pending count", status_queued["pending_count"] == 2)
+        check("Uploader tracks pending bytes", status_queued["pending_bytes"] > 0)
+        check("Safe to disconnect is False while pending", status_queued["safe_to_disconnect"] is False)
+
+        uploader.start()
+        # Wait for queue to drain
+        for _ in range(50):
+            if uploader.is_idle():
+                break
+            time.sleep(0.05)
+
+        uploader.stop()
+        status_done = uploader.get_status()
+        check("Uploader successfully drained all items", status_done["pending_count"] == 0)
+        check("Uploader state is 'synced'", status_done["state"] == "synced")
+        check("Safe to disconnect is True when idle", status_done["safe_to_disconnect"] is True)
+        check("Files exist on durable store", d_store.exists("queue/file1.txt") and d_store.exists("queue/file2.txt"))
+
+    print("\n=== 8. Intra-Stage Checkpoint Resume ===")
+    with tempfile.TemporaryDirectory(prefix="test_ctx_") as tmp_c:
+        c_dir = Path(tmp_c)
+        store = ArtifactStore(user_dir=c_dir, user_id="u_colab")
+        d_store = LocalFolderStore(c_dir / "durable")
+        job = {"id": "j_test_resume", "user": "u_colab", "stages": {}}
+
+        ctx1 = StageContext(
+            job=job,
+            user_dir=c_dir,
+            user_id="u_colab",
+            store=store,
+            durable_store=d_store,
+        )
+
+        # Stage saves partial progress
+        ctx1.checkpoint("chunk_0", {"start": 0.0, "end": 300.0, "words": [{"w": "Hello", "s": 0.5, "e": 0.9}]})
+        ctx1.checkpoint("chunk_1", {"start": 300.0, "end": 600.0, "words": [{"w": "World", "s": 301.0, "e": 301.5}]})
+
+        # Simulate fresh session resuming
+        ctx2 = StageContext(
+            job=job,
+            user_dir=c_dir,
+            user_id="u_colab",
+            store=store,
+            durable_store=d_store,
+        )
+
+        c0 = ctx2.resume_state("chunk_0")
+        c1 = ctx2.resume_state("chunk_1")
+        check("Resumed chunk 0 matches saved state", c0 is not None and c0["words"][0]["w"] == "Hello")
+        check("Resumed chunk 1 matches saved state", c1 is not None and c1["words"][0]["w"] == "World")
+
+    print("\n=== 9. Secrets Absence Rule ===")
+    with tempfile.TemporaryDirectory(prefix="test_sec_") as tmp_s:
+        s_dir = Path(tmp_s)
+        dur_dir = s_dir / "durable"
+        work_dir = s_dir / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        dur_dir.mkdir(parents=True, exist_ok=True)
+        mgr = ColabManager(work_dir=work_dir, durable_dir=dur_dir)
+
+        # Fake local files with secrets in WORK_DIR
+        ai_file = mgr.work_dir / "ai.json"
+        ai_file.write_text('{"provider": "gemini", "key": "SUPER_SECRET_AI_API_KEY"}', encoding="utf-8")
+
+        # Run Colab checkpoint
+        conn = sqlite3.connect(str(mgr.work_dir / "peakcut.db"))
+        conn.execute("CREATE TABLE t (id INT);")
+        conn.commit()
+        conn.close()
+        del conn
+        mgr.checkpoint_now(reason="secret_check")
+
+        # Scan all durable files for secrets
+        found_secret = False
+        for root, _, files in os.walk(dur_dir):
+            for fname in files:
+                fpath = Path(root) / fname
+                try:
+                    data = fpath.read_bytes()
+                    if b"SUPER_SECRET_AI_API_KEY" in data:
+                        found_secret = True
+                except Exception:
+                    pass
+
+        check("Plaintext AI secret key never exists on durable Drive store", found_secret is False)
+        check("ai.json is never uploaded to durable Drive store", not (dur_dir / "ai.json").exists())
+
+    print("\n=== 10. Colab Manager Lifecycle & Server Gate ===")
+    with tempfile.TemporaryDirectory(prefix="test_mgr_") as tmp_m:
+        m_dir = Path(tmp_m)
+        orig_pw = config.OWNER_PASSWORD
+        orig_colab_mode = config.COLAB_MODE
+
+        try:
+            config.COLAB_MODE = True
+            config.OWNER_PASSWORD = ""
+            mgr_fail = ColabManager(work_dir=m_dir / "work", durable_dir=m_dir / "durable")
+            failed_startup = False
+            try:
+                mgr_fail.start()
+            except RuntimeError as e:
+                failed_startup = "PEAKCUT_OWNER_PASSWORD is required" in str(e)
+            check("Server startup fails when COLAB_MODE=True and OWNER_PASSWORD empty", failed_startup)
+
+            # Valid password startup
+            config.OWNER_PASSWORD = "catseye-secure-owner-pw-2026"
+            mgr_ok = ColabManager(work_dir=m_dir / "work", durable_dir=m_dir / "durable")
+            mgr_ok.start()
+            st = mgr_ok.get_status()
+
+            check("ColabManager starts cleanly with valid password", st["colab_mode"] is True)
+            check("Uptime is tracked in status", st["uptime_sec"] >= 0)
+            check("Session lease is active", bool(st["lease"]["session_id"]))
+            check("Drive free space reported", "drive_free_gb" in st)
+
+            mgr_ok.stop()
+            check("ColabManager stops cleanly", mgr_ok._started is False)
+        finally:
+            config.OWNER_PASSWORD = orig_pw
+            config.COLAB_MODE = orig_colab_mode
+
+    print(f"\n==========================================")
+    print(f"Colab Checkpoint Tests Complete: {len(fails)} failures.")
+    print(f"==========================================")
+    return len(fails) == 0
+
+
+if __name__ == "__main__":
+    ok = run_all_tests()
+    sys.exit(0 if ok else 1)

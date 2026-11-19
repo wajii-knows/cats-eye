@@ -123,6 +123,8 @@ stage_runs = sa.Table(                                                        # 
     sa.Column("input_fingerprint", sa.String(64), nullable=False, index=True),
     sa.Column("output_artifacts", sa.Text, nullable=False, server_default="[]"),
     sa.Column("error", sa.Text),
+    sa.Column("local_done", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("durable_done", sa.Boolean, nullable=False, server_default=sa.false()),
 )
 
 artifacts = sa.Table(                                                         # content-addressed artifact index
@@ -142,6 +144,18 @@ artifacts = sa.Table(                                                         # 
 def init():
     from . import migrate
     migrate.run_all(engine)
+    # Ensure additive columns for stage_runs if table was created before Colab phase
+    try:
+        with engine.begin() as conn:
+            insp = sa.inspect(conn)
+            if "stage_runs" in insp.get_table_names():
+                cols = {c["name"] for c in insp.get_columns("stage_runs")}
+                if "local_done" not in cols:
+                    conn.execute(sa.text("ALTER TABLE stage_runs ADD COLUMN local_done BOOLEAN DEFAULT 0"))
+                if "durable_done" not in cols:
+                    conn.execute(sa.text("ALTER TABLE stage_runs ADD COLUMN durable_done BOOLEAN DEFAULT 0"))
+    except Exception:
+        pass
 
 
 

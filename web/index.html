@@ -836,6 +836,33 @@ dialog[open]{animation:fadein .16s ease}
   .set-sec h2{font-size:16px}
   .ai-big{font-size:24px}
 }
+
+/* ============================================================ Colab Cloud Sync */
+.colab-chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:500;cursor:pointer;background:var(--frame-2);border:1px solid var(--line-2);color:var(--frame-text);transition:all .15s ease}
+.colab-chip:hover{border-color:var(--brand)}
+.colab-chip .dot{width:8px;height:8px;border-radius:50%}
+.colab-chip.synced .dot{background:#34D399;box-shadow:0 0 6px rgba(52,211,153,.5)}
+.colab-chip.syncing .dot{background:var(--brand);animation:pulse 1.2s infinite}
+.colab-chip.error .dot{background:var(--bad);box-shadow:0 0 6px rgba(239,68,68,.5)}
+.colab-banner{background:linear-gradient(90deg,rgba(245,158,11,.15),rgba(245,158,11,.05));border:1px solid var(--line-b);border-radius:var(--r);padding:12px 16px;margin:12px 28px 0;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px;color:var(--text);animation:rise .25s ease both}
+.colab-banner .badge{background:var(--brand);color:#041F16;font-weight:700;font-size:11px;padding:2px 7px;border-radius:4px;text-transform:uppercase}
+.colab-banner .close-btn{background:transparent;border:none;color:var(--dim);cursor:pointer;padding:4px;font-size:16px}
+.colab-banner .close-btn:hover{color:var(--text)}
+#colabdlg{padding:0;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--frame);color:var(--text);max-width:560px;width:90vw;box-shadow:0 20px 40px rgba(0,0,0,.6)}
+#colabdlg::backdrop{background:rgba(0,0,0,.7);backdrop-filter:blur(4px)}
+.colab-panel{display:flex;flex-direction:column;gap:16px;padding:24px}
+.colab-panel h2{font-size:20px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
+.colab-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.colab-stat{background:var(--frame-2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.colab-stat small{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
+.colab-stat b{font-size:15px;color:#fff}
+.colab-checkpoints{margin-top:8px}
+.colab-checkpoints table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+.colab-checkpoints th,.colab-checkpoints td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line)}
+.colab-checkpoints th{color:var(--dim);font-weight:600}
+.colab-safe-badge{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:var(--r-sm);font-size:13px;font-weight:500}
+.colab-safe-badge.safe{background:rgba(52,211,153,.12);color:#34D399;border:1px solid rgba(52,211,153,.3)}
+.colab-safe-badge.unsafe{background:rgba(245,158,11,.12);color:var(--brand);border:1px solid rgba(245,158,11,.3)}
 </style>
 </head>
 <body>
@@ -849,14 +876,15 @@ dialog[open]{animation:fadein .16s ease}
   <div class="scrim" data-act="menu"></div>
   <main id="main">
     <header class="topbar"><button class="icon-btn menu" data-act="menu" id="menuBtn" aria-label="Open menu"></button>
-      <span id="tpic"></span><div class="titles"><h1 id="title"></h1><p id="subtitle"></p></div><nav class="utabs" id="utabs" role="tablist" aria-label="Creator sections"></nav><div class="row" id="actions"></div></header>
-    <div id="vbanner"></div>
+      <span id="tpic"></span><div class="titles"><h1 id="title"></h1><p id="subtitle"></p></div><nav class="utabs" id="utabs" role="tablist" aria-label="Creator sections"></nav><div id="colabSyncChip" hidden></div><div class="row" id="actions"></div></header>
+    <div id="vbanner"><div id="colabRecoveryBanner" hidden></div></div>
     <div id="heroSlot"></div>
     <div class="content" id="view"></div>
   </main>
 </div>
 <dialog id="clipdlg"></dialog>
 <dialog id="formdlg"></dialog>
+<dialog id="colabdlg"></dialog>
 <input type="file" id="file" accept="video/*" multiple hidden>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div class="pop" id="bellpop" role="dialog" aria-label="Notifications" hidden></div>
@@ -2518,6 +2546,111 @@ document.addEventListener("click", async e => {
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
 });
 
+/* ============================================================ Colab Cloud Sync */
+let colabStatus = null;
+
+async function fetchColabStatus() {
+  try {
+    const res = await api("/api/colab/status");
+    if (!res || !res.colab_mode) {
+      if ($("#colabSyncChip")) $("#colabSyncChip").hidden = true;
+      if ($("#colabRecoveryBanner")) $("#colabRecoveryBanner").hidden = true;
+      return;
+    }
+    colabStatus = res;
+    renderColabSyncChip();
+    renderColabRecoveryBanner();
+    if ($("#colabdlg") && $("#colabdlg").open) {
+      renderColabPanel();
+    }
+  } catch (err) {}
+}
+
+function renderColabSyncChip() {
+  const chip = $("#colabSyncChip");
+  if (!chip) return;
+  if (!colabStatus || !colabStatus.colab_mode) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  chip.className = `colab-chip ${colabStatus.sync_state}`;
+  chip.innerHTML = `<span class="dot"></span><span>${esc(colabStatus.sync_label)}</span>`;
+  chip.title = `Cloud Sync: ${colabStatus.sync_label} (Click for details)`;
+  chip.onclick = () => openColabModal();
+}
+
+function renderColabRecoveryBanner() {
+  const banner = $("#colabRecoveryBanner");
+  if (!banner) return;
+  if (!colabStatus || !colabStatus.recovery?.recovered || window.colabRecoveryDismissed) {
+    banner.hidden = true;
+    return;
+  }
+  const rec = colabStatus.recovery;
+  const timeStr = rec.checkpoint?.created_at ? new Date(rec.checkpoint.created_at * 1000).toLocaleTimeString() : "";
+  const genStr = rec.checkpoint?.generation ? `Gen ${rec.checkpoint.generation}` : "";
+  banner.hidden = false;
+  banner.className = "colab-banner";
+  banner.innerHTML = `<div><span class="badge">Checkpointed</span> <b>Recovered from Drive checkpoint</b> at ${timeStr} (${genStr}). Resuming ${rec.resumed_jobs} job${rec.resumed_jobs === 1 ? '' : 's'}.</div>
+    <button class="close-btn" type="button" title="Dismiss" onclick="window.colabRecoveryDismissed = true; renderColabRecoveryBanner();">✕</button>`;
+}
+
+function openColabModal() {
+  const dlg = $("#colabdlg");
+  if (!dlg) return;
+  renderColabPanel();
+  dlg.showModal();
+}
+
+function renderColabPanel() {
+  const dlg = $("#colabdlg");
+  if (!dlg || !colabStatus) return;
+  const safe = colabStatus.safe_to_disconnect;
+  const safeHtml = safe
+    ? `<div class="colab-safe-badge safe">${ic("check")} Safe to disconnect. All durable data and database state are verified on Google Drive.</div>`
+    : `<div class="colab-safe-badge unsafe">${ic("bolt")} Sync in progress (${colabStatus.pending_count} items, ${Math.round(colabStatus.pending_bytes / 1024 / 1024)} MB). Do not close Colab yet.</div>`;
+
+  const rows = (colabStatus.last_checkpoints || []).map(cp => {
+    const d = new Date(cp.created_at * 1000).toLocaleTimeString();
+    return `<tr><td><b>Gen ${cp.generation}</b></td><td>${d}</td><td><code>${(cp.sha256 || "").slice(0, 8)}</code></td><td><span style="color:#34D399">${ic("check")} Verified</span></td></tr>`;
+  }).join("");
+
+  dlg.innerHTML = `<div class="colab-panel">
+    <h2><svg viewBox="0 0 256 256" style="width:22px;height:22px;fill:var(--brand)"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H40V56H216V200ZM176,88a48,48,0,0,1-96,0,8,8,0,0,1,16,0,32,32,0,0,0,64,0,8,8,0,0,1,16,0Z"/></svg> Google Drive Cloud Sync</h2>
+    ${safeHtml}
+    <div class="colab-grid">
+      <div class="colab-stat"><small>Google Drive Free Space</small><b>${colabStatus.drive_free_gb} GB</b> <small style="display:inline;color:var(--faint)">(min ${colabStatus.drive_min_free_gb} GB)</small></div>
+      <div class="colab-stat"><small>Session Uptime</small><b>${Math.floor(colabStatus.uptime_sec / 60)}m ${Math.floor(colabStatus.uptime_sec % 60)}s</b></div>
+      <div class="colab-stat"><small>Pending Sync Queue</small><b>${colabStatus.pending_count} files (${Math.round(colabStatus.pending_bytes / 1024 / 1024)} MB)</b></div>
+      <div class="colab-stat"><small>Session Lease</small><b>Active (${colabStatus.lease?.session_id ? colabStatus.lease.session_id.slice(0, 14) : 'Heartbeat OK'})</b></div>
+    </div>
+    <div class="colab-checkpoints">
+      <small style="color:var(--dim);font-weight:600">Last 5 Verified Database Generations</small>
+      <table><thead><tr><th>Generation</th><th>Time</th><th>SHA-256</th><th>Integrity</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4" style="color:var(--faint)">No checkpoints created yet</td></tr>'}</tbody></table>
+    </div>
+    <div class="row" style="justify-content:flex-end;gap:10px;margin-top:12px">
+      <button class="btn" type="button" onclick="$('#colabdlg').close()">Close</button>
+      <button class="btn primary" type="button" id="btnCheckpointNow" onclick="triggerCheckpointNow()">${ic("bolt")} Checkpoint now</button>
+    </div>
+  </div>`;
+}
+
+async function triggerCheckpointNow() {
+  const btn = $("#btnCheckpointNow");
+  if (btn) { btn.disabled = true; btn.textContent = "Checkpointing..."; }
+  try {
+    const res = await api("/api/colab/checkpoint", {method: "POST"});
+    toast(`Verified DB Checkpoint Gen ${res.checkpoint?.generation || ''} created`, "ok");
+    await fetchColabStatus();
+  } catch (err) {
+    toast(err.message || "Checkpoint failed", "bad");
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = `${ic("bolt")} Checkpoint now`; }
+  }
+}
+
 $("#collapseBtn").innerHTML = ic("sidebar"); $("#menuBtn").innerHTML = ic("menu");
 try { if (localStorage.getItem("mini")) $("#app").classList.add("mini"); } catch {}
 $("#main").addEventListener("scroll", () => $(".topbar").classList.toggle("stuck", $("#main").scrollTop > 4), {passive:true});
@@ -2539,6 +2672,8 @@ $("#main").addEventListener("scroll", () => $(".topbar").classList.toggle("stuck
     if (link) { sessionStorage.removeItem("peakcut_link"); go("overview"); $("#url").value = link; onLink($("#url")); $("#url").focus(); toast("Your link is ready. Press Make clips.", "ok"); }
   } catch {}
   loop();
+  fetchColabStatus();
+  setInterval(fetchColabStatus, 5000);
   if (S.status.tour && !$("#formdlg").open) setTimeout(startTour, 500);   // once, the first time someone signs in
   checkNew(true);
   setInterval(async () => { try { S.status = await api("/api/status"); drawShell(); if (S.view === "overview") drawOverview(); checkNew(); } catch {} }, 15000);

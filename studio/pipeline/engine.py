@@ -23,6 +23,9 @@ from typing import Any, Callable, Dict, List, Optional
 import sqlalchemy as sa
 from studio import config, ctx, db, load
 from studio.pipeline.artifacts import ArtifactStore
+from studio.storage.durable import DurableStore
+from studio.storage.uploader import DurableUploader
+from studio.storage.db_checkpoint import DatabaseCheckpointManager
 from studio.pipeline.stage import (
     Stage,
     StageContext,
@@ -88,8 +91,17 @@ def get_process_memory_mb() -> float:
 class PipelineEngine:
     """Orchestrates stage runs, artifact caching, crash resume, and failure recovery."""
 
-    def __init__(self, store: Optional[ArtifactStore] = None):
+    def __init__(
+        self,
+        store: Optional[ArtifactStore] = None,
+        durable_store: Optional[DurableStore] = None,
+        durable_uploader: Optional[DurableUploader] = None,
+        db_checkpoint_mgr: Optional[DatabaseCheckpointManager] = None,
+    ):
         self.store = store or ArtifactStore()
+        self.durable_store = durable_store
+        self.durable_uploader = durable_uploader
+        self.db_checkpoint_mgr = db_checkpoint_mgr
         self.stages: Dict[str, Stage] = {
             "fetch": FetchStage(),
             "probe": ProbeStage(),
@@ -116,26 +128,32 @@ class PipelineEngine:
         fingerprint: str = "",
         output_artifacts: Optional[List[str]] = None,
         error: Optional[Dict[str, Any]] = None,
+        local_done: bool = False,
+        durable_done: bool = False,
     ) -> None:
         try:
             with db.engine.begin() as conn:
                 conn.execute(
                     db.stage_runs.delete().where(db.stage_runs.c.id == run_id)
                 )
-                conn.execute(
-                    db.stage_runs.insert().values(
-                        id=run_id,
-                        job_id=job_id,
-                        stage=stage_name,
-                        status=status,
-                        started_at=started_at,
-                        finished_at=finished_at,
-                        duration_ms=duration_ms,
-                        input_fingerprint=fingerprint,
-                        output_artifacts=json.dumps(output_artifacts or []),
-                        error=json.dumps(error) if error else None,
-                    )
-                )
+                vals = {
+                    "id": run_id,
+                    "job_id": job_id,
+                    "stage": stage_name,
+                    "status": status,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "duration_ms": duration_ms,
+                    "input_fingerprint": fingerprint,
+                    "output_artifacts": json.dumps(output_artifacts or []),
+                    "error": json.dumps(error) if error else None,
+                }
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("stage_runs")}
+                if "local_done" in cols:
+                    vals["local_done"] = local_done
+                if "durable_done" in cols:
+                    vals["durable_done"] = durable_done
+                conn.execute(db.stage_runs.insert().values(**vals))
         except Exception as e:
             logger.warning("Could not record stage run %s: %s", run_id, e)
 
@@ -143,16 +161,29 @@ class PipelineEngine:
         """Find the last completed stage for a job from the database."""
         try:
             with db.engine.connect() as conn:
-                rows = conn.execute(
-                    sa.select(db.stage_runs.c.stage, db.stage_runs.c.status)
-                    .where(db.stage_runs.c.job_id == job_id)
-                    .order_by(db.stage_runs.c.started_at.asc())
-                ).fetchall()
-                last = None
-                for stg, status in rows:
-                    if status in ("done", "skipped_cached"):
-                        last = stg
-                return last
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("stage_runs")}
+                if "durable_done" in cols and (config.COLAB_MODE or self.durable_store):
+                    rows = conn.execute(
+                        sa.select(db.stage_runs.c.stage, db.stage_runs.c.status, db.stage_runs.c.durable_done)
+                        .where(db.stage_runs.c.job_id == job_id)
+                        .order_by(db.stage_runs.c.started_at.asc())
+                    ).fetchall()
+                    last = None
+                    for stg, status, dur_done in rows:
+                        if status == "skipped_cached" or (status == "done" and bool(dur_done)):
+                            last = stg
+                    return last
+                else:
+                    rows = conn.execute(
+                        sa.select(db.stage_runs.c.stage, db.stage_runs.c.status)
+                        .where(db.stage_runs.c.job_id == job_id)
+                        .order_by(db.stage_runs.c.started_at.asc())
+                    ).fetchall()
+                    last = None
+                    for stg, status in rows:
+                        if status in ("done", "skipped_cached"):
+                            last = stg
+                    return last
         except Exception:
             return None
 
@@ -181,9 +212,24 @@ class PipelineEngine:
 
         ctx.job.setdefault("stages", {})
 
-        # 2. Check artifact store for cache hit
+        ctx.stage_name = stage.name
+        if self.durable_store and not ctx.durable_store:
+            ctx.durable_store = self.durable_store
+
+        # 2. Check artifact store for cache hit (locally or on durable Drive store)
         if stage.cacheable:
             cached_manifest = ctx.store.get(fp, stage=stage.name)
+            d_store = self.durable_store or ctx.durable_store
+            if not cached_manifest and d_store:
+                rel_pack = f"artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar"
+                if d_store.exists(rel_pack):
+                    try:
+                        dest_local = ctx.store.root / stage.name / fp[:2] / fp
+                        d_store.get_dir_unpacked(rel_pack, dest_local)
+                        cached_manifest = ctx.store.get(fp, stage=stage.name)
+                    except Exception as e:
+                        logger.warning("Error restoring artifact from durable store: %s", e)
+
             if cached_manifest:
                 self._log_event(
                     "stage_skipped_cached",
@@ -202,6 +248,8 @@ class PipelineEngine:
                     duration_ms=0.0,
                     fingerprint=fp,
                     output_artifacts=list(cached_manifest.get("sha256_map", {}).keys()),
+                    local_done=True,
+                    durable_done=True,
                 )
                 ctx.job["stages"][stage.name] = {
                     "status": "skipped_cached",
@@ -367,6 +415,23 @@ class PipelineEngine:
             except Exception as e:
                 logger.warning("Could not cache artifact for %s: %s", stage.name, e)
 
+        d_store = self.durable_store or ctx.durable_store
+        durable_synced = False
+        if d_store and stage.cacheable:
+            try:
+                dest_local = ctx.store.root / stage.name / fp[:2] / fp
+                if dest_local.is_dir():
+                    d_store.put_dir_packed(
+                        dest_local,
+                        f"artifacts/{stage.name}/{fp[:2]}/{fp}",
+                        archive_name=f"{fp}.tar",
+                    )
+                    durable_synced = True
+            except Exception as e:
+                logger.warning("Could not sync artifact to durable store: %s", e)
+        elif not d_store:
+            durable_synced = True
+
         self._record_stage_run(
             run_id=run_id,
             job_id=job_id,
@@ -377,7 +442,15 @@ class PipelineEngine:
             duration_ms=duration_ms,
             fingerprint=fp,
             output_artifacts=list(files_to_store.keys()),
+            local_done=True,
+            durable_done=durable_synced,
         )
+
+        if self.db_checkpoint_mgr:
+            try:
+                self.db_checkpoint_mgr.create_checkpoint(reason=f"stage_{stage.name}")
+            except Exception as e:
+                logger.warning("DB checkpoint failed after %s: %s", stage.name, e)
         ctx.job["stages"][stage.name] = {
             "status": "done",
             "cached": False,

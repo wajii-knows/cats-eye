@@ -36,14 +36,15 @@ def _quiet(fn):
 
 app = FastAPI(title="Cat's Eye", docs_url=None, redoc_url=None, openapi_url=None)
 WEB = config.ROOT / "web"
-OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/css/", "/fonts/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/styleguide.html")
+OPEN = ("/api/auth/", "/pub/", "/api/public", "/api/colab/login", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/css/", "/fonts/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/styleguide.html")
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
          "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html", "/styleguide.html": "styleguide.html"}
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
 CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
        "frame-src https://player.twitch.tv https://www.youtube-nocookie.com https://player.kick.com; "
-       "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com")
+       + ("frame-ancestors 'self' https://colab.research.google.com;" if config.COLAB_MODE else "frame-ancestors 'none';") +
+       " base-uri 'self'; form-action 'self' https://accounts.google.com")
 
 
 BOOT = f"{int(time.time()) % 100000:x}"     # part of every sync token, so pages reload their data after a restart
@@ -69,6 +70,14 @@ def _startup():
     if not transcribe.REMOTE and config.env("PEAKCUT_FETCH_MODEL", "1") != "0":     # the speech model: fetched now, in the background, if it was never downloaded
         from . import fetch_model
         threading.Thread(target=lambda: _quiet(fetch_model.ensure), daemon=True).start()
+    if config.COLAB_MODE:
+        if not config.OWNER_PASSWORD:
+            raise RuntimeError("PEAKCUT_OWNER_PASSWORD is required when PEAKCUT_COLAB is enabled.")
+        from .storage.colab import get_colab_manager
+        colab_mgr = get_colab_manager()
+        if colab_mgr:
+            force = config.env("PEAKCUT_FORCE_LEASE", "0") == "1"
+            colab_mgr.start(force_lease=force)
     jobs.start()
     live.start()
     posting.start()
@@ -126,6 +135,11 @@ class Gate:
             user = auth._sess.get(auth._h(cookie)) if cookie and not admin_area else None      # remembered: no database, no thread hop
             user = user[1] if user and time.time() - user[0] < auth.SESS_FOR else (
                 await run_in_threadpool(auth.user_for, cookie, admin_area) if cookie else None)
+        elif config.COLAB_MODE:
+            cookie = req.cookies.get(auth.COOKIE, "")
+            user = auth._sess.get(auth._h(cookie)) if cookie and not admin_area else None
+            user = user[1] if user and time.time() - user[0] < auth.SESS_FOR else (
+                await run_in_threadpool(auth.user_for, cookie, admin_area) if cookie else None)
         else:
             # No sign-in: whoever opens the page is the owner. Because nothing else stands in the way, the page
             # must have been asked for by its real address (a number, "localhost", or the address in settings),
@@ -146,10 +160,10 @@ class Gate:
                 if not _from_here(req, must_say=True):
                     return await deny(403, "Cross-site requests are not allowed.")
         if not user and not is_open:
-            if path == "/app" or path.startswith("/app/"):
+            if path == "/app" or path.startswith("/app/") or (config.COLAB_MODE and path == "/"):
                 return await deny(401, "", redirect="/login")
             return await deny(401, "Please sign in.")
-        if user and path in ("/login", "/signup"):
+        if user and (path in ("/login", "/signup") or (config.COLAB_MODE and path == "/")):
             return await deny(303, "", redirect="/app")
         scope.setdefault("state", {})["user"] = user
         if user and path in ("/api/upload", "/api/upload/start") and method == "POST":
@@ -454,7 +468,56 @@ def favicon():
 @app.get("/api/public")
 def public_config():
     from . import mailer
-    return {"google": auth.google_ready(), "mail": mailer.ready(), "verify_email": config.VERIFY_EMAIL}
+    return {
+        "google": auth.google_ready(),
+        "mail": mailer.ready(),
+        "verify_email": config.VERIFY_EMAIL,
+        "colab": config.COLAB_MODE,
+    }
+
+
+@app.post("/api/colab/login")
+def colab_login(request: Request, body: dict = Body(...)):
+    if not config.COLAB_MODE:
+        raise HTTPException(404, "Colab mode is not enabled.")
+    pw = str(body.get("password", ""))
+    try:
+        auth.throttle("colab-login-ip:" + _ip(request), 20, 600)
+    except auth.AuthError as e:
+        raise HTTPException(429, str(e))
+    if not config.OWNER_PASSWORD or not hmac.compare_digest(pw.strip(), config.OWNER_PASSWORD.strip()):
+        raise HTTPException(401, "Incorrect owner password.")
+    owner = auth.local_user()
+    return _signed_in(request, owner, False)
+
+
+@app.get("/api/colab/status")
+def colab_status(request: Request):
+    if not _me(request):
+        raise HTTPException(401, "Please sign in.")
+    if not config.COLAB_MODE:
+        return {"colab_mode": False}
+    from .storage.colab import get_colab_manager
+    mgr = get_colab_manager()
+    if not mgr:
+        return {"colab_mode": False}
+    return mgr.get_status()
+
+
+@app.post("/api/colab/checkpoint")
+def colab_checkpoint(request: Request):
+    if not _me(request):
+        raise HTTPException(401, "Please sign in.")
+    if not config.COLAB_MODE:
+        raise HTTPException(404, "Colab mode is not enabled.")
+    from .storage.colab import get_colab_manager
+    mgr = get_colab_manager()
+    if not mgr:
+        raise HTTPException(500, "Colab manager not initialized.")
+    res = mgr.checkpoint_now(reason="manual_ui")
+    if not res:
+        raise HTTPException(500, "Checkpoint failed.")
+    return {"ok": True, "checkpoint": res}
 
 
 def _signed_in(request: Request, user, first: bool, redirect=None):
@@ -524,6 +587,8 @@ def reset_password(request: Request, body: dict = Body(...)):
 
 @app.post("/api/auth/login")
 def login(request: Request, body: dict = Body(...)):
+    if config.COLAB_MODE:
+        return colab_login(request, body)
     email = str(body.get("email", ""))
     try:
         auth.throttle("login-ip:" + _ip(request), 30, 600)

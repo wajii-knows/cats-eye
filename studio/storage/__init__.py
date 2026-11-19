@@ -12,7 +12,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, load
+from studio import config, load
+from .colab import ColabManager, get_colab_manager, set_colab_manager
 
 _used = {"at": 0.0, "bytes": 0}
 

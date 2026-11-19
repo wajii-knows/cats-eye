@@ -56,6 +56,13 @@ class FetchStage(Stage):
                 raise StageError("DOWNLOAD_AUDIO_FAILED", f"Failed downloading audio: {e}", retryable=True) from e
 
             video_file = media.download(url, d, int(opts.get("quality", 1080) or 1080))
+            if ctx.durable_store:
+                try:
+                    ctx.durable_store.put_file(video_file, f"sources/{video_file.name}")
+                    ctx.job["source_durable"] = True
+                except Exception as e:
+                    logger.warning("Could not persist source video to Drive: %s", e)
+
             return {
                 "source_video": str(video_file),
                 "audio_file": str(audio_file),
@@ -67,7 +74,24 @@ class FetchStage(Stage):
             # Uploaded or local video
             path = Path(src.get("path", ""))
             if not path.is_file():
+                # If missing locally in Colab mode, check durable store
+                if ctx.durable_store and ctx.durable_store.exists(f"sources/{path.name}"):
+                    try:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        ctx.durable_store.get_file(f"sources/{path.name}", path)
+                    except Exception as e:
+                        logger.warning("Could not restore source from Drive: %s", e)
+
+            if not path.is_file():
                 raise StageError("FILE_NOT_FOUND", f"Uploaded video file not found: {path}")
+
+            if ctx.durable_store and not ctx.durable_store.exists(f"sources/{path.name}"):
+                try:
+                    ctx.durable_store.put_file(path, f"sources/{path.name}")
+                    ctx.job["source_durable"] = True
+                except Exception as e:
+                    logger.warning("Could not persist uploaded video to Drive: %s", e)
+
             info = media.probe(path)
             ctx.job.update(source_path=str(path), width=info.get("width"), height=info.get("height"), duration=info.get("duration"))
             if media.save_thumb(d, video=path):

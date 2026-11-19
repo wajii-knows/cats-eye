@@ -17,6 +17,7 @@ FLAG_DEFAULTS: Dict[str, bool] = {
     "PEAKCUT_WORKSPACE": False,
     "PEAKCUT_QC": False,
     "PEAKCUT_LEARNING": False,
+    "PEAKCUT_COLAB": False,
 }
 
 FLAG_DESCRIPTIONS: Dict[str, str] = {
@@ -30,6 +31,7 @@ FLAG_DESCRIPTIONS: Dict[str, str] = {
     "PEAKCUT_WORKSPACE": "Multi-user creator workspaces, teams, and role-based permissions.",
     "PEAKCUT_QC": "Automated quality control checks (caption sync, audio loudness, black frames).",
     "PEAKCUT_LEARNING": "Feedback learning loop to refine hook detection and viral scoring.",
+    "PEAKCUT_COLAB": "Google Colab mode with Google Drive durable storage and verified checkpoints.",
 }
 
 _overrides: Dict[str, bool] = {}

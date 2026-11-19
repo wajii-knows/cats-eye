@@ -176,6 +176,17 @@ def save(job):
         tmp = d / "job.json.tmp"
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(d / "job.json")
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                mgr.db_checkpoint_mgr.mark_dirty()
+                if job.get("user") and job.get("id"):
+                    rel_p = f"users/{job['user']}/jobs/{job['id']}/job.json"
+                    mgr.uploader.enqueue_file(d / "job.json", rel_p)
+        except Exception:
+            pass
 
 
 def _set(job, **kw):
@@ -525,7 +536,22 @@ def _run_job(job):
     from studio.pipeline.stage import StageContext
     from studio.pipeline.artifacts import ArtifactStore
     store = ArtifactStore(user_dir=d.parent.parent, user_id=job.get("user", "default"))
-    sctx = StageContext(job=job, user_dir=d.parent.parent, user_id=job.get("user", "default"), store=store)
+    d_store = None
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                d_store = mgr.durable_store
+        except Exception:
+            pass
+    sctx = StageContext(
+        job=job,
+        user_dir=d.parent.parent,
+        user_id=job.get("user", "default"),
+        store=store,
+        durable_store=d_store,
+    )
     _running_contexts[job["id"]] = sctx
     usage.set_context(job["creator"], job["title"] or src.get("name"))
     resuming = bool(job.pop("resume", False)) and (d / "words.json").is_file()
@@ -791,6 +817,14 @@ def _worker(quick_only=False):
 def _pick_up_after_restart():
     """Videos and single clips that were being made when the server stopped: queued again, oldest first."""
     waiting = sorted((j for j in all_jobs() if j.get("status") == "queued" and j.get("resume")), key=lambda j: j["created"])
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                mgr.set_resumed_jobs_count(len(waiting))
+        except Exception:
+            pass
     for j in waiting:
         _q.put(("job", j["id"], None), user=j["user"])
     for j in all_jobs():

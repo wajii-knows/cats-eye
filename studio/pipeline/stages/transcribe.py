@@ -19,6 +19,7 @@ class TranscribeStage(Stage):
     inputs = ("audio_wav",)
     outputs = ("transcript_words", "words_json")
     cacheable = True
+    progress_unit = "5m_chunk"
 
     def run(self, ctx: StageContext) -> Dict[str, Any]:
         d = Path(ctx.job["dir"])
@@ -46,7 +47,35 @@ class TranscribeStage(Stage):
 
         try:
             audio = media.load_audio(Path(wav))
-            words = transcribe.transcribe(audio)
+            total_samples = len(audio)
+            CHUNK_SAMPLES = 5 * 60 * 16000  # 5 minutes of 16kHz mono audio
+
+            if total_samples <= CHUNK_SAMPLES:
+                saved = ctx.resume_state("chunk_0")
+                if saved and "words" in saved:
+                    words = saved["words"]
+                else:
+                    words = transcribe.transcribe(audio)
+                    ctx.checkpoint("chunk_0", {"words": words, "chunk_index": 0})
+            else:
+                words = []
+                chunks = [(i, i + CHUNK_SAMPLES) for i in range(0, total_samples, CHUNK_SAMPLES)]
+                for idx, (c_start, c_end) in enumerate(chunks):
+                    slice_end = min(total_samples, c_end)
+                    chk_key = f"chunk_{idx}"
+                    saved = ctx.resume_state(chk_key)
+                    if saved and "words" in saved:
+                        chunk_words = saved["words"]
+                    else:
+                        sub_audio = audio[c_start:slice_end]
+                        shift_sec = c_start / 16000.0
+                        raw_words = transcribe.transcribe(sub_audio)
+                        chunk_words = [
+                            dict(w, s=round(w.get("s", 0) + shift_sec, 2), e=round(w.get("e", 0) + shift_sec, 2))
+                            for w in raw_words
+                        ]
+                        ctx.checkpoint(chk_key, {"words": chunk_words, "chunk_index": idx, "shift_sec": shift_sec})
+                    words.extend(chunk_words)
         except Exception as e:
             raise StageError("TRANSCRIBE_FAILED", f"Speech recognition failed: {e}") from e
 

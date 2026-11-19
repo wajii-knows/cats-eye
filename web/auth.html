@@ -128,15 +128,31 @@ $("google").href = "/auth/google/start?next=" + encodeURIComponent(dest);
 const fail = m => { $("err").textContent = m; $("err").classList.add("on"); };
 if (new URLSearchParams(location.search).get("error") === "google") fail("Google sign-in didn't finish. Try again, or use your email.");
 fetch("/api/public").then(r => r.json()).then(p => {
-  if (p.google) { $("google").hidden = false; $("or").hidden = false; }
+  if (p.colab) {
+    window.isColab = true;
+    document.title = "Unlock Cat's Eye";
+    $("h").textContent = "Colab Owner Access";
+    $("p").textContent = "Enter your owner password to open Cat's Eye.";
+    $("go").textContent = "Unlock Cat's Eye";
+    $("email").value = "owner@colab";
+    const emailLabel = $("email").closest("label");
+    if (emailLabel) emailLabel.hidden = true;
+    $("swap").hidden = true;
+    $("forgot").hidden = true;
+    $("legal").hidden = true;
+  } else if (p.google) {
+    $("google").hidden = false; $("or").hidden = false;
+  }
 }).catch(() => {});
 $("f").addEventListener("submit", async e => {
   e.preventDefault(); $("err").classList.remove("on");
   const email = $("email").value.trim(), password = $("password").value;
-  if (!email || !password) return fail("Enter your email and password.");
+  if (!password) return fail(window.isColab ? "Enter your owner password." : "Enter your password.");
+  if (!window.isColab && !email) return fail("Enter your email and password.");
   $("go").disabled = true;
   try {
-    const r = await fetch(up ? "/api/auth/signup" : "/api/auth/login", {method:"POST", headers:{"Content-Type":"application/json"},
+    const endpoint = window.isColab ? "/api/colab/login" : (up ? "/api/auth/signup" : "/api/auth/login");
+    const r = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({email, password, name:$("name").value.trim()})});
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Something went wrong. Try again.");

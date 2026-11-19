@@ -61,7 +61,8 @@ def main() -> int:
                 ("the storage folder: full drive, open, move", ["tests/test_storage.py"]),
                 ("snapshots and multishot rendering", ["tests/test_multishot_snapshots.py"]),
                 ("brand identity and UI assets", ["tests/test_brand_identity.py", BASE]),
-                ("resumable pipeline stages and contracts", ["tests/test_pipeline_stages.py"])]
+                ("resumable pipeline stages and contracts", ["tests/test_pipeline_stages.py"]),
+                ("colab durable store, checkpoints and recovery", ["tests/test_colab_checkpoints.py"])]
         for name, args in runs:
             print(f"\n=== {name} ===", flush=True)
             r = subprocess.run([sys.executable, *args], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")

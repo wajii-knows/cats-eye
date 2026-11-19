@@ -126,6 +126,8 @@ class StageRunRecord(BaseModel):
     input_fingerprint: str
     output_artifacts: List[str] = Field(default_factory=list)
     error: Optional[Dict[str, Any]] = None
+    local_done: bool = False
+    durable_done: bool = False
 
 
 class StageContext:
@@ -143,6 +145,8 @@ class StageContext:
         cancel_event: Optional[threading.Event] = None,
         active_processes: Optional[List[subprocess.Popen]] = None,
         logger_instance: Optional[logging.Logger] = None,
+        durable_store: Optional[Any] = None,
+        stage_name: str = "",
     ):
         self.job = job
         self.user_dir = Path(user_dir)
@@ -154,6 +158,8 @@ class StageContext:
         self.cancel_event = cancel_event or threading.Event()
         self.active_processes = active_processes if active_processes is not None else []
         self.logger = logger_instance or logger
+        self.durable_store = durable_store
+        self.stage_name = stage_name
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set()
@@ -173,11 +179,60 @@ class StageContext:
                 pass
         self.active_processes.clear()
 
+    def checkpoint(self, key: str, payload: Dict[str, Any]) -> None:
+        """Save intra-stage progress state both locally and to durable store."""
+        job_id = self.job.get("id", "job")
+        chk_dir = self.user_dir / "checkpoints" / job_id
+        chk_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{self.stage_name}_{key}.json"
+        local_file = chk_dir / filename
+        local_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        if self.durable_store:
+            try:
+                rel_path = f"checkpoints/{job_id}/{filename}"
+                self.durable_store.put_file(local_file, rel_path)
+            except Exception as e:
+                self.logger.warning("Could not persist intra-stage checkpoint %s: %s", key, e)
+
+    def resume_state(self, key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve intra-stage checkpoint state from local disk or durable store."""
+        job_id = self.job.get("id", "job")
+        chk_dir = self.user_dir / "checkpoints" / job_id
+        filename = f"{self.stage_name}_{key}.json"
+        local_file = chk_dir / filename
+
+        # 1. Check local file
+        if local_file.is_file():
+            try:
+                return json.loads(local_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        # 2. Check durable store
+        if self.durable_store:
+            rel_path = f"checkpoints/{job_id}/{filename}"
+            if self.durable_store.exists(rel_path):
+                try:
+                    local_file.parent.mkdir(parents=True, exist_ok=True)
+                    self.durable_store.get_file(rel_path, local_file)
+                    return json.loads(local_file.read_text(encoding="utf-8"))
+                except Exception as e:
+                    self.logger.warning("Could not restore intra-stage checkpoint %s: %s", key, e)
+
+        return None
+
 
 class Stage:
     """Base class for all pipeline processing stages."""
 
     name: str = ""
+    version: int = 1
+    inputs: Tuple[str, ...] = ()
+    params_schema: Any = None
+    outputs: Tuple[str, ...] = ()
+    cacheable: bool = True
+    progress_unit: str = "stage"  # unit of intra-stage progress (e.g. 5m chunk, batch of 64, etc.)
     version: int = 1
     inputs: Tuple[str, ...] = ()
     params_schema: Any = None
