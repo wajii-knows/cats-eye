@@ -968,6 +968,13 @@ def delete_job(jid: str):
     return {"ok": True}
 
 
+@app.post("/api/jobs/{jid}/cancel")
+def cancel_job(jid: str):
+    job = _job_or_404(jid)
+    jobs.cancel(jid)
+    return {"ok": True}
+
+
 def _pairs(v, limit=300) -> list:
     """[[video id, clip id], ...] from the page, checked."""
     out = []

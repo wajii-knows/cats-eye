@@ -6,7 +6,7 @@ import time
 
 import sqlalchemy as sa
 
-from . import config
+from studio import config
 
 _SQLITE = config.DATABASE_URL.startswith("sqlite")
 engine = sa.create_engine(config.DATABASE_URL, pool_pre_ping=not _SQLITE, future=True, pool_size=20, max_overflow=40,
@@ -111,9 +111,38 @@ admin_log = sa.Table(                                                         # 
     sa.Column("detail", sa.String(300), nullable=False, server_default=""),
 )
 
+stage_runs = sa.Table(                                                        # stage-based execution records
+    "stage_runs", meta,
+    sa.Column("id", sa.String(64), primary_key=True),
+    sa.Column("job_id", sa.String(64), nullable=False, index=True),
+    sa.Column("stage", sa.String(64), nullable=False),
+    sa.Column("status", sa.String(32), nullable=False),                       # pending | running | done | failed | skipped_cached
+    sa.Column("started_at", sa.Float, nullable=False),
+    sa.Column("finished_at", sa.Float),
+    sa.Column("duration_ms", sa.Float),
+    sa.Column("input_fingerprint", sa.String(64), nullable=False, index=True),
+    sa.Column("output_artifacts", sa.Text, nullable=False, server_default="[]"),
+    sa.Column("error", sa.Text),
+)
+
+artifacts = sa.Table(                                                         # content-addressed artifact index
+    "artifacts", meta,
+    sa.Column("fingerprint", sa.String(64), primary_key=True),
+    sa.Column("stage", sa.String(64), nullable=False, index=True),
+    sa.Column("version", sa.Integer, nullable=False),
+    sa.Column("user_id", sa.String(64), nullable=False, index=True),
+    sa.Column("path", sa.String(512), nullable=False),
+    sa.Column("size_bytes", sa.BigInteger, nullable=False),
+    sa.Column("created_at", sa.Float, nullable=False),
+    sa.Column("accessed_at", sa.Float, nullable=False),
+    sa.Column("metadata_json", sa.Text, nullable=False, server_default="{}"),
+)
+
 
 def init():
-    meta.create_all(engine)
+    from . import migrate
+    migrate.run_all(engine)
+
 
 
 def now() -> float:

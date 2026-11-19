@@ -324,7 +324,27 @@ def _live_worker():
             traceback.print_exc()
 
 
+_running_contexts: dict = {}
+
+
+def cancel(jid: str) -> bool:
+    with _lock:
+        job = _jobs.get(jid)
+        if not job:
+            return False
+        ctx_obj = _running_contexts.get(jid)
+        if ctx_obj:
+            if hasattr(ctx_obj, "cancel_event"):
+                ctx_obj.cancel_event.set()
+            if hasattr(ctx_obj, "kill_active_processes"):
+                ctx_obj.kill_active_processes()
+        job.update(status="failed", stage="Cancelled by user", error="Cancelled by user")
+        save(job)
+        return True
+
+
 def delete(jid):
+    cancel(jid)
     with _lock:
         job = _jobs.pop(jid, None)
         if job:
@@ -501,6 +521,12 @@ def _run_job(job):
     src = job["source"]
     t0 = time.time()
     notes = []
+    job.setdefault("stages", {})
+    from studio.pipeline.stage import StageContext
+    from studio.pipeline.artifacts import ArtifactStore
+    store = ArtifactStore(user_dir=d.parent.parent, user_id=job.get("user", "default"))
+    sctx = StageContext(job=job, user_dir=d.parent.parent, user_id=job.get("user", "default"), store=store)
+    _running_contexts[job["id"]] = sctx
     usage.set_context(job["creator"], job["title"] or src.get("name"))
     resuming = bool(job.pop("resume", False)) and (d / "words.json").is_file()
     if resuming:   # after a restart: keep the transcript parts, clips and AI answers already made, and carry on
@@ -755,6 +781,8 @@ def _worker(quick_only=False):
                 _set(job, status="error", error=safe.friendly(e), stage="Stopped")
                 creators.log(job["creator"], f"Video failed: {safe.friendly(e)[:200]}")
         finally:
+            if kind == "job" and job:
+                _running_contexts.pop(job["id"], None)
             ctx._uid.reset(token)
             if kind == "job":
                 _q.done()

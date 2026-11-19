@@ -1768,6 +1768,22 @@ function liveHtml(j) {
     </div>${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}</div>
     ${j.clips.length ? `<div class="grid" style="margin-bottom:28px">${[...j.clips].reverse().map(c => clipHtml(j, c)).join("")}</div>` : ""}`;
 }
+function stagesHtml(j) {
+  if (!j.stages || typeof j.stages !== 'object') return '';
+  const order = ['fetch', 'probe', 'extract_audio', 'transcribe', 'select_clips', 'render_clip', 'post'];
+  const labels = {fetch: 'Fetch', probe: 'Probe', extract_audio: 'Audio', transcribe: 'Speech', select_clips: 'Clips', render_clip: 'Render', post: 'Post'};
+  const items = order.filter(s => j.stages[s]).map(s => {
+    const st = j.stages[s];
+    const isCached = st.cached || st.status === 'skipped_cached';
+    const badge = isCached ? '<span class="pill sm" style="background:var(--brand-muted, rgba(245,158,11,0.15));color:var(--brand, #f59e0b);font-weight:600" title="Loaded from cache">⚡ cached</span>' : (st.duration_ms != null ? `<span class="pill sm sub" title="Stage duration">⏱ ${(st.duration_ms / 1000).toFixed(1)}s</span>` : '');
+    const icon = st.status === 'done' || isCached ? '✓ ' : (st.status === 'running' ? '● ' : (st.status === 'failed' ? '✕ ' : ''));
+    return `<div class="ce-stage-item ${st.status}" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 10px;border-radius:14px;background:var(--surface-2, #1a1d24);border:1px solid var(--border, #2a2d36)">
+      <span>${icon}${labels[s] || s}</span> ${badge}
+    </div>`;
+  });
+  if (!items.length) return '';
+  return `<div class="ce-stages-bar" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px 0">${items.join('')}</div>`;
+}
 function jobHtml(j) {
   if (j.status === "live") return liveHtml(j);
   const busy = j.status === "queued" || j.status === "running";
@@ -1781,6 +1797,7 @@ function jobHtml(j) {
         <button class="btn sm icon ghost" data-act="deljob" data-j="${j.id}" title="Delete" aria-label="Delete this video and its clips">${ic("trash")}</button>
         <label class="selck" title="Select this video and its clips"><input type="checkbox" data-sel="j:${j.id}" ${sel().has("j:" + j.id) ? "checked" : ""} aria-label="Select this video"></label>`}</div></div>
     ${busy ? `<div class="bar"><i style="width:${Math.round(j.progress * 100)}%"></i></div><p class="sub">${esc(j.stage)} · ${Math.round(j.progress * 100)}%</p>` : ""}
+    ${stagesHtml(j)}
     ${j.status === "done" && !j.clips.length ? `<p class="sub">${esc(j.stage)}</p>` : ""}
     ${j.error ? `<div class="err">${esc(j.error)}<button class="rep" data-act="report" data-ctx="${esc("Video failed: " + (j.title || j.source.name || "") + " | " + j.error)}">Report this</button></div>` : ""}${j.ai?.note ? `<p class="sub">${esc(j.ai.note)}</p>` : ""}
     ${j.clips.length ? `<div class="grid">${j.clips.map(c => clipHtml(j, c)).join("")}</div>` : ""}`;

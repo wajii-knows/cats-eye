@@ -1,0 +1,486 @@
+"""DAG pipeline execution engine for Cat's Eye.
+
+Executes pipeline stages as a directed acyclic graph (DAG):
+    fetch -> probe -> extract_audio -> transcribe -> select_clips -> render_clip -> post
+With:
+- Content-addressed artifact caching (skipped_cached)
+- Crash recovery and automatic resume from the last completed stage
+- Exponential backoff retry for retryable stage errors (up to 3 times)
+- Child process cleanup on job cancellation
+- Structured JSON logging and observability metrics (timing, cache badges, memory deltas)
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+import sqlalchemy as sa
+from studio import config, ctx, db, load
+from studio.pipeline.artifacts import ArtifactStore
+from studio.pipeline.stage import (
+    Stage,
+    StageContext,
+    StageError,
+    StageRunRecord,
+    compute_file_sha256,
+    compute_stage_fingerprint,
+)
+from studio.pipeline.stages import (
+    ExtractAudioStage,
+    FetchStage,
+    PostStage,
+    ProbeStage,
+    RenderClipStage,
+    SelectClipsStage,
+    TranscribeStage,
+)
+
+logger = logging.getLogger("studio.pipeline.engine")
+
+
+def get_process_memory_mb() -> float:
+    """Return the current process memory working set in megabytes."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            pmc = PROCESS_MEMORY_COUNTERS()
+            pmc.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            fn = ctypes.windll.psapi.GetProcessMemoryInfo
+            fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS), wintypes.DWORD]
+            fn.restype = wintypes.BOOL
+            h = ctypes.windll.kernel32.GetCurrentProcess()
+            if fn(h, ctypes.byref(pmc), pmc.cb):
+                return round(pmc.WorkingSetSize / (1024 * 1024), 2)
+        except Exception:
+            pass
+    else:
+        try:
+            import resource
+
+            return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2)
+        except Exception:
+            pass
+    return 0.0
+
+
+class PipelineEngine:
+    """Orchestrates stage runs, artifact caching, crash resume, and failure recovery."""
+
+    def __init__(self, store: Optional[ArtifactStore] = None):
+        self.store = store or ArtifactStore()
+        self.stages: Dict[str, Stage] = {
+            "fetch": FetchStage(),
+            "probe": ProbeStage(),
+            "extract_audio": ExtractAudioStage(),
+            "transcribe": TranscribeStage(),
+            "select_clips": SelectClipsStage(),
+            "render_clip": RenderClipStage(),
+            "post": PostStage(),
+        }
+
+    def _log_event(self, event_name: str, **kwargs) -> None:
+        payload = {"event": event_name, "t": round(time.time(), 3), **kwargs}
+        logger.info(json.dumps(payload))
+
+    def _record_stage_run(
+        self,
+        run_id: str,
+        job_id: str,
+        stage_name: str,
+        status: str,
+        started_at: float,
+        finished_at: Optional[float] = None,
+        duration_ms: Optional[float] = None,
+        fingerprint: str = "",
+        output_artifacts: Optional[List[str]] = None,
+        error: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    db.stage_runs.delete().where(db.stage_runs.c.id == run_id)
+                )
+                conn.execute(
+                    db.stage_runs.insert().values(
+                        id=run_id,
+                        job_id=job_id,
+                        stage=stage_name,
+                        status=status,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        duration_ms=duration_ms,
+                        input_fingerprint=fingerprint,
+                        output_artifacts=json.dumps(output_artifacts or []),
+                        error=json.dumps(error) if error else None,
+                    )
+                )
+        except Exception as e:
+            logger.warning("Could not record stage run %s: %s", run_id, e)
+
+    def get_last_completed_stage(self, job_id: str) -> Optional[str]:
+        """Find the last completed stage for a job from the database."""
+        try:
+            with db.engine.connect() as conn:
+                rows = conn.execute(
+                    sa.select(db.stage_runs.c.stage, db.stage_runs.c.status)
+                    .where(db.stage_runs.c.job_id == job_id)
+                    .order_by(db.stage_runs.c.started_at.asc())
+                ).fetchall()
+                last = None
+                for stg, status in rows:
+                    if status in ("done", "skipped_cached"):
+                        last = stg
+                return last
+        except Exception:
+            return None
+
+    def execute_stage(
+        self,
+        stage: Stage,
+        ctx: StageContext,
+        source_id: str,
+        stage_index: int = 1,
+        total_stages: int = 7,
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+    ) -> Dict[str, Any]:
+        job_id = ctx.job["id"]
+        stage_name = stage.name
+        run_id = f"{job_id}_{stage_name}_{int(time.time() * 1000)}"
+        params = stage.get_params(ctx)
+
+        # 1. Compute deterministic fingerprint
+        fp = compute_stage_fingerprint(
+            stage_name=stage.name,
+            stage_version=stage.version,
+            source_identifier=source_id,
+            params=params,
+            upstream_fingerprints=ctx.upstream_fingerprints,
+        )
+
+        ctx.job.setdefault("stages", {})
+
+        # 2. Check artifact store for cache hit
+        if stage.cacheable:
+            cached_manifest = ctx.store.get(fp, stage=stage.name)
+            if cached_manifest:
+                self._log_event(
+                    "stage_skipped_cached",
+                    stage=stage.name,
+                    job_id=job_id,
+                    fingerprint=fp,
+                    duration_ms=0.0,
+                )
+                self._record_stage_run(
+                    run_id=run_id,
+                    job_id=job_id,
+                    stage_name=stage.name,
+                    status="skipped_cached",
+                    started_at=time.time(),
+                    finished_at=time.time(),
+                    duration_ms=0.0,
+                    fingerprint=fp,
+                    output_artifacts=list(cached_manifest.get("sha256_map", {}).keys()),
+                )
+                ctx.job["stages"][stage.name] = {
+                    "status": "skipped_cached",
+                    "cached": True,
+                    "duration_ms": 0.0,
+                    "fingerprint": fp,
+                }
+                ctx.upstream_fingerprints[stage.name] = fp
+                cached_outputs = cached_manifest.get("metadata", {}).get("outputs", {})
+                ctx.inputs.update(cached_outputs)
+                if progress_cb:
+                    progress_cb(stage_index / total_stages, f"{stage.name} (cached)")
+                return cached_outputs
+
+        # 3. Check cancellation before running
+        if ctx.is_cancelled():
+            self._record_stage_run(
+                run_id=run_id,
+                job_id=job_id,
+                stage_name=stage.name,
+                status="failed",
+                started_at=time.time(),
+                finished_at=time.time(),
+                duration_ms=0.0,
+                fingerprint=fp,
+                error={"cancelled": True, "message": "Job cancelled"},
+            )
+            ctx.job["stages"][stage.name] = {
+                "status": "failed",
+                "cancelled": True,
+                "fingerprint": fp,
+            }
+            raise StageError("CANCELLED", "Job was cancelled by user", retryable=False, detail={"cancelled": True})
+
+        # 4. Execute stage with retry on retryable errors
+        t0 = time.time()
+        start_mem = get_process_memory_mb()
+        self._record_stage_run(
+            run_id=run_id,
+            job_id=job_id,
+            stage_name=stage.name,
+            status="running",
+            started_at=t0,
+            fingerprint=fp,
+        )
+        ctx.job["stages"][stage.name] = {
+            "status": "running",
+            "started_at": t0,
+            "fingerprint": fp,
+        }
+        self._log_event(
+            "stage_started",
+            stage=stage.name,
+            job_id=job_id,
+            fingerprint=fp,
+            mem_mb=start_mem,
+        )
+        if progress_cb:
+            progress_cb((stage_index - 0.5) / total_stages, f"Running {stage.name}")
+
+        retries = 0
+        max_retries = 3
+        backoff = 1.0
+
+        outputs = {}
+        while True:
+            try:
+                outputs = stage.run(ctx)
+                break
+            except StageError as e:
+                if e.retryable and retries < max_retries:
+                    retries += 1
+                    self._log_event(
+                        "stage_retry",
+                        stage=stage.name,
+                        job_id=job_id,
+                        retry=retries,
+                        error=e.message,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2.0
+                    continue
+                else:
+                    duration_ms = (time.time() - t0) * 1000
+                    self._record_stage_run(
+                        run_id=run_id,
+                        job_id=job_id,
+                        stage_name=stage.name,
+                        status="failed",
+                        started_at=t0,
+                        finished_at=time.time(),
+                        duration_ms=duration_ms,
+                        fingerprint=fp,
+                        error=e.to_dict(),
+                    )
+                    ctx.job["stages"][stage.name] = {
+                        "status": "failed",
+                        "error": e.message,
+                        "duration_ms": duration_ms,
+                        "fingerprint": fp,
+                    }
+                    self._log_event(
+                        "stage_failed",
+                        stage=stage.name,
+                        job_id=job_id,
+                        fingerprint=fp,
+                        duration_ms=duration_ms,
+                        error=e.message,
+                    )
+                    raise
+            except Exception as e:
+                duration_ms = (time.time() - t0) * 1000
+                err_dict = {"code": "UNHANDLED_ERROR", "message": str(e), "retryable": False}
+                self._record_stage_run(
+                    run_id=run_id,
+                    job_id=job_id,
+                    stage_name=stage.name,
+                    status="failed",
+                    started_at=t0,
+                    finished_at=time.time(),
+                    duration_ms=duration_ms,
+                    fingerprint=fp,
+                    error=err_dict,
+                )
+                ctx.job["stages"][stage.name] = {
+                    "status": "failed",
+                    "error": str(e),
+                    "duration_ms": duration_ms,
+                    "fingerprint": fp,
+                }
+                self._log_event(
+                    "stage_failed",
+                    stage=stage.name,
+                    job_id=job_id,
+                    fingerprint=fp,
+                    duration_ms=duration_ms,
+                    error=str(e),
+                )
+                raise
+
+        t1 = time.time()
+        duration_ms = (t1 - t0) * 1000
+        end_mem = get_process_memory_mb()
+        mem_delta = round(end_mem - start_mem, 2)
+
+        # 5. Persist output artifacts if cacheable
+        files_to_store = {}
+        for k, v in outputs.items():
+            if isinstance(v, (str, Path)) and Path(v).is_file():
+                p = Path(v)
+                # Key by filename
+                files_to_store[p.name] = p
+
+        if stage.cacheable:
+            try:
+                ctx.store.put(
+                    stage=stage.name,
+                    fingerprint=fp,
+                    files=files_to_store,
+                    metadata={"outputs": {k: str(v) if isinstance(v, Path) else v for k, v in outputs.items()}},
+                    version=stage.version,
+                )
+            except Exception as e:
+                logger.warning("Could not cache artifact for %s: %s", stage.name, e)
+
+        self._record_stage_run(
+            run_id=run_id,
+            job_id=job_id,
+            stage_name=stage.name,
+            status="done",
+            started_at=t0,
+            finished_at=t1,
+            duration_ms=duration_ms,
+            fingerprint=fp,
+            output_artifacts=list(files_to_store.keys()),
+        )
+        ctx.job["stages"][stage.name] = {
+            "status": "done",
+            "cached": False,
+            "duration_ms": round(duration_ms, 1),
+            "fingerprint": fp,
+        }
+        self._log_event(
+            "stage_finished",
+            stage=stage.name,
+            job_id=job_id,
+            fingerprint=fp,
+            duration_ms=round(duration_ms, 1),
+            mem_delta_mb=mem_delta,
+        )
+
+        ctx.upstream_fingerprints[stage.name] = fp
+        ctx.inputs.update(outputs)
+        if progress_cb:
+            progress_cb(stage_index / total_stages, f"{stage.name} done")
+        return outputs
+
+    def run_pipeline(
+        self,
+        job: Dict[str, Any],
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """Execute the standard Cat's Eye pipeline DAG for a job."""
+        user_id = job.get("user") or ctx.uid_or_none() or "default"
+        if self.store:
+            store = self.store
+            user_dir = store.user_dir
+        else:
+            user_dir = Path(job.get("dir", config.DATA_DIR)).parent.parent
+            store = ArtifactStore(user_dir=user_dir, user_id=user_id)
+        job_ctx = StageContext(
+            job=job,
+            user_dir=user_dir,
+            user_id=user_id,
+            store=store,
+            cancel_event=cancel_event,
+        )
+
+        src = job.get("source", {})
+        if src.get("type") == "url":
+            source_id = f"url_{src.get('url')}"
+        else:
+            p = Path(src.get("path", ""))
+            source_id = compute_file_sha256(p) if p.is_file() else f"file_{p.name}"
+
+        stage_order = [
+            ("fetch", self.stages["fetch"]),
+            ("probe", self.stages["probe"]),
+            ("extract_audio", self.stages["extract_audio"]),
+            ("transcribe", self.stages["transcribe"]),
+            ("select_clips", self.stages["select_clips"]),
+        ]
+
+        total_steps = len(stage_order) + 2  # plus render and post
+        step_idx = 1
+
+        for name, stg in stage_order:
+            self.execute_stage(
+                stage=stg,
+                ctx=job_ctx,
+                source_id=source_id,
+                stage_index=step_idx,
+                total_stages=total_steps,
+                progress_cb=progress_cb,
+            )
+            step_idx += 1
+
+        # Render clips
+        clips_spec = job_ctx.inputs.get("clips_spec", [])
+        rendered_clips = []
+        render_stg = self.stages["render_clip"]
+
+        for i, clip in enumerate(clips_spec):
+            job_ctx.inputs["current_clip"] = clip
+            clip_res = self.execute_stage(
+                stage=render_stg,
+                ctx=job_ctx,
+                source_id=f"{source_id}_clip_{i}",
+                stage_index=step_idx,
+                total_stages=total_steps,
+                progress_cb=progress_cb,
+            )
+            rendered_clips.append(clip_res)
+
+        step_idx += 1
+        # Optional post stage
+        post_stg = self.stages["post"]
+        post_res = self.execute_stage(
+            stage=post_stg,
+            ctx=job_ctx,
+            source_id=source_id,
+            stage_index=step_idx,
+            total_stages=total_steps,
+            progress_cb=progress_cb,
+        )
+
+        return {
+            "stages": job.get("stages", {}),
+            "clips": rendered_clips,
+            "post": post_res,
+        }
