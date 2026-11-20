@@ -53,9 +53,43 @@ z_punchy[18] = 2.9
 z_punchy[19] = 3.1
 punchy_sc = brain.score_clip(0.0, 21.0, words=punchy_words, db_z=z_punchy)
 check(
-    "punchy 21s clip with 0-3s hook & climax scores >= 82 and viral/strong tier",
-    punchy_sc["score"] >= 82 and punchy_sc["scores"]["hook"] >= 80 and punchy_sc["tier"] in ("viral", "strong") and bool(punchy_sc["scroll_stopper"]),
+    "punchy 21s clip with 0-2s hook & climax scores >= 85, 1M+ Strangers reach, loop_seamless & share_trigger",
+    (
+        punchy_sc["score"] >= 85
+        and punchy_sc["scores"]["hook"] >= 80
+        and punchy_sc["scores"]["shareability"] >= 80
+        and punchy_sc["scores"]["focus"] >= 85
+        and punchy_sc["tier"] == "viral"
+        and punchy_sc["audience_reach"] == "1M+ Strangers"
+        and punchy_sc["loop_seamless"] is True
+        and bool(punchy_sc["share_trigger"])
+        and bool(punchy_sc["scroll_stopper"])
+    ),
     str(punchy_sc),
+)
+
+# Multi-beat wandering clip ("delivers one clear thing" check)
+multi_beat_words = make_words(
+    "Look at this play right here! Anyway moving on to the next thing by the way on another note let us change the subject.",
+    start=0.2, step=0.7,
+)
+multi_beat_sc = brain.score_clip(0.0, 22.0, words=multi_beat_words, db_z=np.zeros(23, dtype=np.float32), ai_clip={"score": 90, "focus_score": 90})
+check(
+    "multi-beat topic-wandering clip is capped on focus <= 55 ('one clear thing' rule)",
+    multi_beat_sc["scores"]["focus"] <= 55,
+    str(multi_beat_sc),
+)
+
+# Insider-only stream lore clip ("instantly understandable to strangers" 1M+ vs 100K rule)
+insider_words = make_words(
+    "Wait remember on yesterday's stream in the discord as I told chat earlier only channel members and regulars know part 2!",
+    start=0.1, step=0.65,
+)
+insider_sc = brain.score_clip(0.0, 18.0, words=insider_words, db_z=z_punchy, ai_clip={"score": 92, "clarity_score": 92})
+check(
+    "insider-lore clip is capped on clarity <= 55 and blocked from 1M+ Strangers reach",
+    insider_sc["scores"]["clarity"] <= 55 and insider_sc["audience_reach"] != "1M+ Strangers",
+    str(insider_sc),
 )
 
 bloated_text = ("hey guys welcome back so anyway today we are going to talk a little bit about some "
@@ -103,8 +137,15 @@ check(
     str([(p["score"], p["hook"]) for p in picks]),
 )
 check(
-    "fallback_by_loudness omits shots when PEAKCUT_MULTISHOT=0 and exposes scores/tier/scroll_stopper",
-    all(p["shots"] == [] and set(p["scores"]) == {"hook", "pacing", "payoff", "clarity"} and p["tier"] in ("viral", "strong", "good", "weak") and "scroll_stopper" in p for p in picks),
+    "fallback_by_loudness omits shots when PEAKCUT_MULTISHOT=0 and exposes 6-pillar scores/reach/scroll_stopper",
+    all(
+        p["shots"] == []
+        and set(p["scores"]) == {"hook", "pacing", "payoff", "shareability", "focus", "clarity"}
+        and p["tier"] in ("viral", "strong", "good", "weak")
+        and p["audience_reach"] in ("1M+ Strangers", "100K+ Audience", "Core Followers", "Low Reach")
+        and "scroll_stopper" in p
+        for p in picks
+    ),
     str(picks[0]),
 )
 compat_picks = brain.fallback_by_loudness(np.array([1.0] * 30), [{"w": "hello", "s": 2.0, "e": 3.0}], 1, 15, 30.0)

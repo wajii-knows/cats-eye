@@ -22,8 +22,12 @@ SCHEMA = {
             "hook_score": {"type": "INTEGER"},
             "pacing_score": {"type": "INTEGER"},
             "payoff_score": {"type": "INTEGER"},
+            "share_score": {"type": "INTEGER"},
+            "focus_score": {"type": "INTEGER"},
             "clarity_score": {"type": "INTEGER"},
             "scroll_stopper": {"type": "STRING"},
+            "share_trigger": {"type": "STRING"},
+            "loop_seamless": {"type": "BOOLEAN"},
             "category": {"type": "STRING"},
             "hook": {"type": "STRING"},
             "title": {"type": "STRING"},
@@ -49,9 +53,16 @@ SCHEMA = {
 }
 
 HEAD = """You are an elite viral short-form clip scout (YouTube Shorts, Reels, TikTok).
-Viewers decide within the first 2-3 seconds whether to swipe away or keep watching. Every clip you pick
-MUST open immediately on a scroll-stopper moment: shock, a bold claim, a punchy question, sudden rage or
-laughter, a clutch play, or mid-action chaos - never slow buildup, greetings, or dead air.
+Your goal is to find clips that cross 1M+ views with STRANGERS — people with zero connection to the creator
+who cannot scroll past it — rather than clips that only existing followers understand.
+
+Every 1M+ stranger-ready clip hits 6 pillars:
+1. Wins the first 1-2 seconds: immediate hook (surprising visual/action, bold claim, open question, or mid-action with zero intro). If viewers swipe early, nothing else matters.
+2. Watched to the end or watched twice: short, tightly edited, built around a payoff right at the end, or loops smoothly back to the start.
+3. Delivers ONE clear thing: one idea, one emotion, one payoff in a single clean beat (never three competing topics).
+4. Makes people share or comment: triggers "this is so you" friend-shares, comment debates, awe, or "wait, what?!" reactions.
+5. Instantly understandable & works on mute: zero insider stream lore needed; captions + big hook text make a stranger get it in seconds.
+6. Proven pattern with a fresh twist: familiar setup with an unexpected outcome or angle.
 
 Below is a timestamped transcript of part of a video. Each line starts with [seconds]. Lines marked (LOUD)
 are where the audio got much louder than usual: shouting, laughing, sudden action. Lines marked (CHAT)
@@ -60,41 +71,46 @@ are where the live chat suddenly got much busier, which usually means viewers re
 Video title: {title}
 Channel: {uploader}
 
-Pick up to {n} tight, self-contained scroll-stopper clips for someone who has never seen this creator.
+Pick up to {n} tight, self-contained scroll-stopper clips that pass the Stranger Test.
 """
 
 LIVE_NOTE = """
 This is a LIVE stream and the transcript is only the last few minutes, ending at {now:.0f} seconds.
 If a moment is still unfolding at the very end, leave it out; you will see it again in the next check.
-Most checks should return []. Only return a moment you would immediately stop scrolling for.
+Most checks should return []. Only return a moment a complete stranger would immediately stop scrolling for.
 """
 
 RULES = """
 Rules:
 - Each clip is {min_len} to {max_len} seconds. Aim for the tightest punchy length (ideal sweet spot 15-32 seconds):
   cut ALL preamble, greetings, slow setup, and trailing chatter. Never pad a clip just to reach max_len.
-- Open directly on a 0-3 second scroll-stopper line or vocal reaction (pattern interrupt, curiosity gap, bold claim,
-  shock, or sudden energy spike) - never start on silence or slow exposition.
-- End right after the payoff or reaction, on the last word of a complete sentence: never mid-sentence and never
-  trailing into dead air. The clip must make sense on its own.
-- Do not pick intros, sponsor reads, "like and subscribe", or filler banter.
-- Skip weak moments. Fewer viral clips beat many mediocre ones. Return [] if nothing stops the scroll.
-- scroll_stopper: the exact opening line or moment in the first 0-3 seconds that hooks a stranger (at most 12 words).
-- hook_score: 0-100, strength of the first 0-3 seconds as a scroll-stopper (90+ instant shock/curiosity/reaction; <60 slow).
-- pacing_score: 0-100, tight rhythm with zero dead air or rambling (90+ crisp 15-32s momentum; <60 drags).
-- payoff_score: 0-100, strength of the twist, punchline, fail, clutch, or emotional climax.
-- clarity_score: 0-100, completely understandable to a stranger with zero stream context.
-- score: 0-100, calibrated overall viral score (be honest: 85-100 viral scroll-stopper; 70-84 strong; 55-69 decent; <55 weak).
-- hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
+- Open directly on a 0-2 second scroll-stopper line or vocal reaction (pattern interrupt, curiosity gap, bold claim,
+  open question, or mid-action chaos) - never start on silence or slow exposition.
+- Build toward a payoff right at the end and cut immediately after the payoff sentence finishes so completion rate
+  and loop rewatches stay high: never mid-sentence and never trailing into dead air after the climax.
+- Deliver ONE clear beat (one idea, one emotion, one payoff). Skip clips that wander across multiple topics.
+- Must pass the Stranger Test & work on mute: skip moments that rely on insider stream lore ("yesterday's stream",
+  "like I told chat earlier"). Skip weak moments; return [] if nothing would stop a stranger's scroll.
+- scroll_stopper: the exact opening line or moment in the first 0-2 seconds that hooks a stranger (at most 12 words).
+- share_trigger: short label for why people share or comment (e.g. "Wait, what?!", "Send to a friend", "Comment debate", "Pure awe / clutch", "Plot twist").
+- loop_seamless: true if the ending flows seamlessly back into the opening line for rewatches, else false.
+- hook_score: 0-100, strength of the first 1-2 seconds (90+ instant mid-action/claim/question; <60 slow intro).
+- pacing_score: 0-100, completion & rewatch tightness with payoff at the very end and zero dead air.
+- payoff_score: 0-100, strength of the end climax and fresh twist on a recognizable pattern.
+- share_score: 0-100, how strongly it drives shares ("this is so you") or comment section arguments/reactions.
+- focus_score: 0-100, single clean beat (90+ one unmistakable idea/emotion; <60 tries to do 2-3 things).
+- clarity_score: 0-100, stranger clarity + works on mute (90+ any stranger gets it in 2s; <60 needs insider context).
+- score: 0-100, calibrated overall viral score (85-100 = 1M+ Stranger-ready; 70-84 = 100K+ Good for audience; 55-69 = Followers only; <55 = weak, skip).
+- hook: at most 5 words, ALL CAPS, shown as big text on the video so the clip works on mute. Curiosity, true to what happens.
 - title: at most 70 characters, for the post.
 - description: one or two sentences.
 - hashtags: 5 tags without the # sign.
-- highlight_words: 3 to 6 single words spoken in the clip that carry the punch.
-- Write hook, title, description, hashtags, scroll_stopper and highlight_words in English. If the video is in Hindi
-  or Urdu, you may write them the way people type Hindi and Urdu in Roman letters (Hinglish: "yaar ye kya hai"),
+- highlight_words: 3 to 6 single words spoken in the clip that carry the punch on mute.
+- Write hook, title, description, hashtags, scroll_stopper, share_trigger and highlight_words in English. If the video
+  is in Hindi or Urdu, you may write them the way people type Hindi and Urdu in Roman letters (Hinglish: "yaar ye kya hai"),
   never in Devanagari or Urdu script. For any other language, write them in English.
 - category: one of funny, fail, clutch, rage, shock, take, story, other.
-- reason: one short sentence on why a stranger stops scrolling and watches to the end.
+- reason: one short sentence on why a stranger stops scrolling, watches to the end, and shares or comments.
 - shots: optional array of dynamic shot cuts (types: 'wide', 'close', 'crop', 'zoom', 'split').
   Varying shots every 3 to 6 seconds keeps viewer retention much higher than a single static shot.
 
@@ -120,6 +136,38 @@ _HOOK_CUES = re.compile(
 _PREAMBLE_CUES = re.compile(
     r"(?i)\b(hey\s+guys|what'?s\s+up\s+guys|welcome\s+back|so\s+anyway|in\s+today'?s\s+video|"
     r"before\s+we\s+start|don'?t\s+forget\s+to|like\s+and\s+subscribe|let\s+me\s+explain)\b"
+)
+_MULTI_BEAT_CUES = re.compile(
+    r"(?i)\b(anyway|moving\s+on|by\s+the\s+way|next\s+thing|another\s+thing|on\s+another\s+note|"
+    r"unrelated|speaking\s+of\s+which|also\s+guys|second\s+of\s+all|third\s+of\s+all|change\s+the\s+subject)\b"
+)
+_INSIDER_CUES = re.compile(
+    r"(?i)\b(yesterday'?s\s+stream|last\s+stream|remember\s+last\s+week|as\s+i\s+said\s+earlier|"
+    r"told\s+chat\s+earlier|in\s+the\s+discord|channel\s+members|part\s+two|part\s+2|if\s+you\s+watched\s+yesterday|"
+    r"regulars\s+know)\b"
+)
+_TWIST_CUES = re.compile(
+    r"(?i)\b(plot\s+twist|turns\s+out|until|little\s+did|thought\s+he|thought\s+i|instead|"
+    r"instantly\s+regretted|out\s+of\s+nowhere|right\s+when|suddenly|except)\b"
+)
+_SHARE_ARCHETYPES = (
+    ("Wait, what?!", re.compile(
+        r"(?i)\b(wait\s+what|what\s+just\s+happened|how\s+did|no\s+way|impossible|wtf|ain'?t\s+no\s+way|"
+        r"are\s+you\s+kidding|did\s+you\s+just\s+see|what\s+happened|kya\s+hua)\b"
+    )),
+    ("Send to a friend", re.compile(
+        r"(?i)\b(every\s+time|that\s+one\s+friend|when\s+you|pov|me\s+when|bro\s+really|we\s+all\s+know|"
+        r"why\s+do\s+we|this\s+is\s+why|never\s+let|so\s+you)\b"
+    )),
+    ("Comment debate", re.compile(
+        r"(?i)\b(unpopular\s+opinion|hot\s+take|overrated|underrated|nobody\s+talks\s+about|hear\s+me\s+out|"
+        r"prove\s+me\s+wrong|am\s+i\s+wrong|worst|best\s+ever|fake|rigged|scam|truth\s+is)\b"
+    )),
+    ("Pure awe / clutch", re.compile(
+        r"(?i)\b(clutched|one\s+hp|1\s+hp|world\s+record|first\s+try|insane|unbelievable|wiped|whole\s+squad|"
+        r"never\s+seen|greatest|what\s+a\s+finish)\b"
+    )),
+    ("Plot twist", _TWIST_CUES),
 )
 _FILLER_WORDS = {"um", "uh", "erm", "like", "so", "and", "but", "well", "okay", "ok", "yeah", "actually"}
 
@@ -224,6 +272,16 @@ def _score_tier(score: int) -> str:
     return "viral" if score >= 85 else "strong" if score >= 70 else "good" if score >= 55 else "weak"
 
 
+def _audience_reach(score: int, hook: int, clarity: int, has_insider: bool = False) -> str:
+    if score >= 85 and hook >= 78 and clarity >= 70 and not has_insider:
+        return "1M+ Strangers"
+    if score >= 70:
+        return "100K+ Audience"
+    if score >= 55:
+        return "Core Followers"
+    return "Low Reach"
+
+
 def _has_loud_spike(db_z, t0: float, t1: float, thresh: float = 1.5) -> bool:
     if db_z is None or not len(db_z):
         return False
@@ -233,11 +291,17 @@ def _has_loud_spike(db_z, t0: float, t1: float, thresh: float = 1.5) -> bool:
 
 
 def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len: int = 15, max_len: int = 35) -> dict:
-    """Calibrated viral scoring on 4 dimensions: hook (0-3s scroll-stopper), pacing, payoff, and clarity.
-    Blends objective audio + transcript signals with AI sub-scores (when present) and caps dead-air/bloat inflation."""
+    """Calibrated viral scoring across the 6 pillars of a 1M+ stranger-ready clip:
+    1. hook (wins the first 1-2s: mid-action, bold claim, open question, zero intro)
+    2. pacing (completion & rewatch: short, tight, end-loaded payoff, seamless loop)
+    3. payoff (climax & fresh twist on a recognizable pattern)
+    4. shareability (friend-share 'this is so you', comment debate, awe, 'wait, what?!')
+    5. focus (delivers ONE clear beat/idea/emotion; penalizes multi-topic wandering)
+    6. clarity (instantly understandable to strangers & works on mute; penalizes insider lore)"""
     s, e = float(s), float(e)
     dur = max(0.5, e - s)
     cwords = [w for w in (words or []) if float(w.get("e", 0.0)) >= s - 0.05 and float(w.get("s", 0.0)) <= e + 0.05]
+    full_text = " ".join(str(w.get("w", "")) for w in cwords)
 
     seg_z = open_z = np.empty(0)
     has_audio = False
@@ -246,7 +310,7 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         i1 = min(len(db_z), max(i0 + 1, int(math.ceil(e))))
         if i1 > i0:
             seg_z = db_z[i0:i1]
-            o1 = min(len(db_z), max(i0 + 1, int(math.ceil(min(e, s + 3.0)))))
+            o1 = min(len(db_z), max(i0 + 1, int(math.ceil(min(e, s + 2.5)))))
             open_z = db_z[i0:o1]
             has_audio = True
 
@@ -254,26 +318,28 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     speech_delay = max(0.0, float(w0["s"]) - s) if w0 else dur
     loud_delay = None
     if has_audio:
-        for k in range(min(4, len(seg_z))):
+        for k in range(min(3, len(seg_z))):
             if float(seg_z[k]) >= 1.5:
                 loud_delay = max(0.0, float(i0 + k) - s)
                 break
     onset_delay = min(speech_delay, loud_delay) if loud_delay is not None else speech_delay
 
-    open_words = [w for w in cwords if float(w["s"]) <= s + 3.5]
+    open_words = [w for w in cwords if float(w["s"]) <= s + 3.0]
+    first_2s_words = [w for w in cwords if float(w["s"]) <= s + 2.2]
     open_text = " ".join(str(w.get("w", "")) for w in open_words)
     has_preamble = bool(_PREAMBLE_CUES.search(open_text))
+    has_insider = bool(_INSIDER_CUES.search(full_text))
 
-    # 1. Hook score (0-3s scroll-stopper strength)
+    # 1. Hook score (wins the first 1-2 seconds)
     obj_hook = 16.0
-    if onset_delay <= 0.45:
-        obj_hook += 24.0
-    elif onset_delay <= 1.0:
-        obj_hook += 12.0
-    elif onset_delay <= 1.5:
+    if onset_delay <= 0.35:
+        obj_hook += 25.0
+    elif onset_delay <= 0.9:
+        obj_hook += 13.0
+    elif onset_delay <= 1.4:
         obj_hook += 4.0
     else:
-        obj_hook -= 12.0
+        obj_hook -= 14.0
 
     open_peak = float(np.max(open_z)) if has_audio else 0.0
     if has_audio:
@@ -290,23 +356,26 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
 
     cue_hits = len(_HOOK_CUES.findall(open_text)) + (1 if ("?" in open_text or "!" in open_text) else 0)
     obj_hook += (10.0 if cue_hits >= 1 else 0.0) + (6.0 if cue_hits >= 2 else 0.0) + (4.0 if cue_hits >= 3 else 0.0)
-    if len(open_words) >= 4:
+    if len(first_2s_words) >= 3 or len(open_words) >= 4:
         obj_hook += 10.0
     elif len(open_words) >= 2:
         obj_hook += 5.0
     elif not open_words and open_peak < 1.8:
         obj_hook -= 16.0
     if has_preamble:
-        obj_hook -= 24.0
+        obj_hook -= 26.0
     obj_hook = max(10.0, min(98.0, obj_hook))
 
-    # 2. Pacing score (sweet-spot duration, speech cadence, low dead air)
+    # 2. Pacing, completion & seamless loop score
     dead_sec = 0.0
+    mid_resets = 0
     if cwords:
         for i in range(len(cwords) - 1):
             g = float(cwords[i + 1]["s"]) - float(cwords[i]["e"])
             if g > 1.2 and not _has_loud_spike(db_z, float(cwords[i]["e"]), float(cwords[i + 1]["s"])):
                 dead_sec += (g - 0.6)
+                if s + 2.5 < float(cwords[i]["e"]) < e - 2.5 and g > 1.6:
+                    mid_resets += 1
         tail_gap = max(0.0, e - float(cwords[-1]["e"]))
         if tail_gap > 1.0 and not _has_loud_spike(db_z, float(cwords[-1]["e"]), e):
             dead_sec += (tail_gap - 0.8)
@@ -315,7 +384,20 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             dead_sec += (head_gap - 0.5)
         dead_ratio = dead_sec / dur
     else:
+        tail_gap = dur
         dead_ratio = 0.25
+
+    end_loaded = False
+    if has_audio and len(seg_z) >= 4:
+        late_idx = int(len(seg_z) * 0.65)
+        late_peak_z = float(np.max(seg_z[late_idx:])) if late_idx < len(seg_z) else float(np.max(seg_z))
+        end_loaded = late_peak_z >= 1.2
+    elif cwords:
+        end_loaded = str(cwords[-1].get("w", ""))[-1:] in "?!" or bool(_TWIST_CUES.search(full_text))
+
+    loop_seamless = bool(
+        cwords and onset_delay <= 0.45 and tail_gap <= 0.75 and (end_loaded or str(cwords[-1].get("w", ""))[-1:] in ".?!")
+    )
 
     wps = len(cwords) / dur
     obj_pacing = 12.0
@@ -355,13 +437,15 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_pacing += 6.0
     elif not has_audio:
         obj_pacing += 3.0
+    if loop_seamless:
+        obj_pacing += 5.0
     obj_pacing = max(10.0, min(98.0, obj_pacing))
 
-    # 3. Payoff score (peak intensity, dynamic contrast, late climax, crisp ending)
+    # 3. Payoff & fresh twist score (end climax, dynamic contrast, expectation twist)
     obj_payoff = 14.0
+    peak_z = float(np.max(seg_z)) if has_audio else 0.0
+    contrast = (peak_z - float(np.median(seg_z))) if has_audio else 0.0
     if has_audio:
-        peak_z = float(np.max(seg_z))
-        contrast = peak_z - float(np.median(seg_z))
         obj_payoff += 36.0 if peak_z >= 2.5 else 26.0 if peak_z >= 1.6 else 15.0 if peak_z >= 0.8 else 5.0
         obj_payoff += 14.0 if contrast >= 1.5 else 7.0 if contrast >= 0.8 else 0.0
         late_start = int(len(seg_z) * 0.6)
@@ -373,6 +457,9 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     else:
         obj_payoff += 38.0
 
+    twist_hits = len(_TWIST_CUES.findall(full_text))
+    if twist_hits:
+        obj_payoff += min(10.0, twist_hits * 5.0)
     if cwords:
         end_gap = e - float(cwords[-1]["e"])
         last_w = str(cwords[-1].get("w", ""))
@@ -382,7 +469,52 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_payoff -= 10.0
     obj_payoff = max(10.0, min(98.0, obj_payoff))
 
-    # 4. Clarity score (self-contained context signals)
+    # 4. Share & comment trigger score (relatability, controversy, awe, 'wait, what?!')
+    detected_trigger = ""
+    archetype_hits = 0
+    for label, rx in _SHARE_ARCHETYPES:
+        m = rx.findall(full_text)
+        if m:
+            archetype_hits += len(m)
+            if not detected_trigger:
+                detected_trigger = label
+    exclam_q = full_text.count("!") + full_text.count("?")
+    obj_share = 24.0
+    if archetype_hits >= 3:
+        obj_share += 36.0
+    elif archetype_hits == 2:
+        obj_share += 28.0
+    elif archetype_hits == 1:
+        obj_share += 18.0
+    if exclam_q >= 2:
+        obj_share += 14.0
+    elif exclam_q == 1:
+        obj_share += 8.0
+    if has_audio:
+        if peak_z >= 2.3 and contrast >= 1.5:
+            obj_share += 22.0
+            if not detected_trigger:
+                detected_trigger = "Pure awe / clutch"
+        elif peak_z >= 1.4:
+            obj_share += 12.0
+    else:
+        obj_share += 12.0
+    if has_preamble or has_insider:
+        obj_share -= 18.0
+    obj_share = max(10.0, min(98.0, obj_share))
+
+    # 5. Focus / Single-Beat score (delivers one clear idea/emotion/payoff)
+    after_open_text = " ".join(str(w.get("w", "")) for w in cwords if float(w.get("s", 0.0)) > s + 2.0)
+    topic_pivots = len(_MULTI_BEAT_CUES.findall(after_open_text)) + (1 if _MULTI_BEAT_CUES.search(open_text) else 0)
+    obj_focus = 88.0 if 12.0 <= dur <= 32.0 else 76.0 if dur <= 38.0 else 58.0 if dur <= 48.0 else 42.0
+    obj_focus -= topic_pivots * 20.0 + mid_resets * 14.0
+    if dead_ratio <= 0.06 and topic_pivots == 0 and 14.0 <= dur <= 30.0:
+        obj_focus += 6.0
+    if not cwords:
+        obj_focus = 50.0
+    obj_focus = max(10.0, min(98.0, obj_focus))
+
+    # 6. Stranger Clarity & Works-on-Mute score
     n_w = len(cwords)
     obj_clarity = 18.0 + (34.0 if n_w >= 18 else 24.0 if n_w >= 10 else 14.0 if n_w >= 5 else 4.0)
     first_clean = re.sub(r"[^a-z]", "", str(w0.get("w", "")).lower()) if w0 else ""
@@ -397,9 +529,11 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_clarity += 8.0
         elif f_ratio > 0.25:
             obj_clarity -= 10.0
-    obj_clarity = max(10.0, min(75.0, obj_clarity))
+    if has_insider:
+        obj_clarity -= 26.0
+    obj_clarity = max(10.0, min(78.0, obj_clarity))
 
-    # Blend with AI sub-scores (when present) and enforce hard dead-air / bloat ceilings
+    # Blend with AI sub-scores (when present) and enforce hard dead-air / bloat / stranger-test ceilings
     ai_raw = ai_clip if isinstance(ai_clip, dict) else {}
     ai_base = _num(ai_raw.get("score"), -1.0)
 
@@ -407,11 +541,14 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         v = _num(ai_raw.get(key), ai_base)
         return v if 0.0 <= v <= 100.0 else -1.0
 
-    ai_h, ai_p, ai_pay, ai_cl = _ai_sub("hook_score"), _ai_sub("pacing_score"), _ai_sub("payoff_score"), _ai_sub("clarity_score")
+    ai_h, ai_p, ai_pay = _ai_sub("hook_score"), _ai_sub("pacing_score"), _ai_sub("payoff_score")
+    ai_sh, ai_fo, ai_cl = _ai_sub("share_score"), _ai_sub("focus_score"), _ai_sub("clarity_score")
     hook = (0.60 * ai_h + 0.40 * obj_hook) if ai_h >= 0.0 else obj_hook
     pacing = (0.55 * ai_p + 0.45 * obj_pacing) if ai_p >= 0.0 else obj_pacing
     payoff = (0.65 * ai_pay + 0.35 * obj_payoff) if ai_pay >= 0.0 else obj_payoff
-    clarity = (0.75 * ai_cl + 0.25 * obj_clarity) if ai_cl >= 0.0 else obj_clarity
+    share = (0.55 * ai_sh + 0.45 * obj_share) if ai_sh >= 0.0 else obj_share
+    focus = (0.50 * ai_fo + 0.50 * obj_focus) if ai_fo >= 0.0 else obj_focus
+    clarity = (0.70 * ai_cl + 0.30 * obj_clarity) if ai_cl >= 0.0 else obj_clarity
 
     if onset_delay > 2.5:
         hook = min(hook, 40.0)
@@ -421,13 +558,21 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         hook = min(hook, 52.0)
     if dur > 48.0:
         pacing = min(pacing, 66.0)
+        focus = min(focus, 60.0)
     if dead_ratio > 0.25:
         pacing = min(pacing, 58.0)
+    if topic_pivots >= 2 or (topic_pivots >= 1 and mid_resets >= 1):
+        focus = min(focus, 55.0)
+    if has_insider:
+        clarity = min(clarity, 55.0)
 
-    ih, ip, iy, ic = (max(0, min(100, int(round(v)))) for v in (hook, pacing, payoff, clarity))
-    total = 0.35 * ih + 0.25 * ip + 0.25 * iy + 0.15 * ic
+    ih, ip, iy, ish, ifo, ic = (max(0, min(100, int(round(v)))) for v in (hook, pacing, payoff, share, focus, clarity))
+    total = 0.30 * ih + 0.18 * ip + 0.20 * iy + 0.12 * ish + 0.10 * ifo + 0.10 * ic
     if dur > 45.0:
         total -= min(18.0, (dur - 45.0) * 0.9)
+    # "If viewers leave early, nothing else matters": a failed 0-2s hook caps the entire clip
+    if ih < 50:
+        total = min(total, float(ih + 12))
     score_i = max(0, min(100, int(round(total))))
 
     ss_raw = ai_raw.get("scroll_stopper")
@@ -436,11 +581,27 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     else:
         sample = open_words[:10] if open_words else cwords[:8]
         ss = roman.to_roman(_text(" ".join(str(w.get("w", "")) for w in sample), 90))
+
+    st_raw = ai_raw.get("share_trigger")
+    share_trig = roman.to_roman(_text(st_raw, 45)) if st_raw else (detected_trigger or ("High energy moment" if score_i >= 70 else ""))
+    if isinstance(ai_raw.get("loop_seamless"), bool):
+        loop_seamless = bool(ai_raw.get("loop_seamless")) and onset_delay <= 1.0 and tail_gap <= 1.2
+
     return {
         "score": score_i,
-        "scores": {"hook": ih, "pacing": ip, "payoff": iy, "clarity": ic},
+        "scores": {
+            "hook": ih,
+            "pacing": ip,
+            "payoff": iy,
+            "shareability": ish,
+            "focus": ifo,
+            "clarity": ic,
+        },
         "tier": _score_tier(score_i),
+        "audience_reach": _audience_reach(score_i, ih, ic, has_insider=has_insider),
         "scroll_stopper": ss,
+        "share_trigger": share_trig,
+        "loop_seamless": loop_seamless,
     }
 
 
@@ -475,7 +636,10 @@ def _tidy(c, s, e, words=None, db_slice=None, score_info=None):
         score_val = max(0, min(100, int(_num(score_info.get("score")))))
         scores_dict = dict(score_info.get("scores") or {})
         tier = str(score_info.get("tier") or _score_tier(score_val))
+        reach = str(score_info.get("audience_reach") or _audience_reach(score_val, scores_dict.get("hook", score_val), scores_dict.get("clarity", score_val)))
         ss = roman.to_roman(_text(score_info.get("scroll_stopper"), 90))
+        st = roman.to_roman(_text(score_info.get("share_trigger"), 45))
+        loop_ok = bool(score_info.get("loop_seamless", False))
     else:
         score_val = max(0, min(100, int(_num(c.get("score")))))
         raw_sub = c.get("scores") if isinstance(c.get("scores"), dict) else {}
@@ -483,12 +647,18 @@ def _tidy(c, s, e, words=None, db_slice=None, score_info=None):
             "hook": max(0, min(100, int(_num(raw_sub.get("hook", c.get("hook_score", score_val)))))),
             "pacing": max(0, min(100, int(_num(raw_sub.get("pacing", c.get("pacing_score", score_val)))))),
             "payoff": max(0, min(100, int(_num(raw_sub.get("payoff", c.get("payoff_score", score_val)))))),
+            "shareability": max(0, min(100, int(_num(raw_sub.get("shareability", c.get("share_score", score_val)))))),
+            "focus": max(0, min(100, int(_num(raw_sub.get("focus", c.get("focus_score", score_val)))))),
             "clarity": max(0, min(100, int(_num(raw_sub.get("clarity", c.get("clarity_score", score_val)))))),
         }
         tier = str(c.get("tier") or _score_tier(score_val))
+        reach = str(c.get("audience_reach") or _audience_reach(score_val, scores_dict["hook"], scores_dict["clarity"]))
         ss = roman.to_roman(_text(c.get("scroll_stopper"), 90))
+        st = roman.to_roman(_text(c.get("share_trigger"), 45))
+        loop_ok = bool(c.get("loop_seamless", False))
     return {
-        "start": s, "end": e, "score": score_val, "scores": scores_dict, "tier": tier, "scroll_stopper": ss,
+        "start": s, "end": e, "score": score_val, "scores": scores_dict, "tier": tier,
+        "audience_reach": reach, "scroll_stopper": ss, "share_trigger": st, "loop_seamless": loop_ok,
         "category": cat if cat in CATEGORIES else "other",
         "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
@@ -646,10 +816,11 @@ def fallback_by_loudness(db, words, n, max_len, duration, min_len=15):
         picks.append({
             "start": round(s, 2), "end": round(e, 2),
             "score": sc["score"], "scores": sc["scores"], "tier": sc["tier"],
-            "scroll_stopper": sc["scroll_stopper"],
+            "audience_reach": sc["audience_reach"], "scroll_stopper": sc["scroll_stopper"],
+            "share_trigger": sc["share_trigger"], "loop_seamless": sc["loop_seamless"],
             "category": "other", "hook": hook, "title": title, "description": "",
             "hashtags": [], "highlight_words": [],
-            "reason": f"Picked by audio energy & pacing (Hook {sc['scores']['hook']}, Pacing {sc['scores']['pacing']}).",
+            "reason": f"Picked by audio energy & pacing (Hook {sc['scores']['hook']}, Payoff {sc['scores']['payoff']}).",
             "shots": plan_multishots(s, e, words=words, db_slice=seg_z) if flags.is_on("PEAKCUT_MULTISHOT") else [],
         })
         if len(picks) >= pool_limit:

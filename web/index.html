@@ -535,7 +535,7 @@ img.av{object-fit:cover}
 .ss-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:var(--r-sm);background:var(--brand-soft);color:var(--brand);border:1px solid var(--brand-line);width:fit-content}
 .clip-scores{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:2px}
 .clip-scores b{color:var(--text);font-weight:600}
-.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0 6px}
+.score-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0 6px}
 .score-cell{background:var(--frame);border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 8px;display:flex;flex-direction:column;gap:4px}
 .score-cell .sk{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)}
 .score-cell .sv{font-size:14px;font-weight:700;color:var(--text)}
@@ -1804,14 +1804,15 @@ function clipHtml(j, c) {
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   const key = `c:${j.id}:${c.id}`, busyClip = c.status === "queued" || c.status === "rendering";
   const sc = c.scores;
-  const scoreTip = sc ? `Hook ${Number(sc.hook ?? 0)} · Pacing ${Number(sc.pacing ?? 0)} · Payoff ${Number(sc.payoff ?? 0)} · Clarity ${Number(sc.clarity ?? 0)}` : "Viral score";
+  const scoreTip = sc ? `Hook ${Number(sc.hook ?? 0)} · Completion ${Number(sc.pacing ?? 0)} · Payoff ${Number(sc.payoff ?? 0)} · Share ${Number(sc.shareability ?? sc.hook ?? 0)} · Focus ${Number(sc.focus ?? sc.pacing ?? 0)} · Strangers ${Number(sc.clarity ?? 0)}` : "Viral score";
   const isStopper = sc && (Number(sc.hook ?? 0) >= 80 || c.tier === "viral");
-  const miniScores = sc ? `<div class="clip-scores"><span>Hook <b>${Number(sc.hook ?? 0)}</b></span><span>Pace <b>${Number(sc.pacing ?? 0)}</b></span><span>Payoff <b>${Number(sc.payoff ?? 0)}</b></span></div>` : "";
+  const reachTag = c.audience_reach === "1M+ Strangers" ? " · 1M+ Strangers" : (c.loop_seamless ? " · Loop" : "");
+  const miniScores = sc ? `<div class="clip-scores"><span>Hook <b>${Number(sc.hook ?? 0)}</b></span><span>Pace <b>${Number(sc.pacing ?? 0)}</b></span><span>Payoff <b>${Number(sc.payoff ?? 0)}</b></span>${sc.shareability != null ? `<span>Share <b>${Number(sc.shareability)}</b></span>` : ""}</div>` : "";
   return `<article class="clip ${sel().has(key) ? "picked" : ""}">
     <button class="shot" data-act="openclip" ${a} aria-label="Open clip: ${esc(c.title || c.hook)}">${body}
       <span class="badge l ${scoreCls(c.score)}" title="${esc(scoreTip)}">${c.score || "Hand"}</span><span class="badge r">${fmt(c.end - c.start)}</span></button>
     <div class="clip-body">
-      ${isStopper ? `<span class="ss-pill">Scroll-stopper</span>` : ""}
+      ${isStopper ? `<span class="ss-pill">Scroll-stopper${esc(reachTag)}</span>` : ""}
       <div class="hook">${esc(c.hook || "Untitled clip")}</div>
       <div class="ttl">${esc(c.title)}</div>
       ${miniScores}
@@ -2278,19 +2279,24 @@ function drawClipDlg(full) {
     : c.status === "error" ? `<div class="err" style="padding:20px;text-align:center">${esc(c.error || "Could not make this clip.")}</div>`
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   if (full) {
-    const tierLabel = c.tier ? ` · ${esc(c.tier.charAt(0).toUpperCase() + c.tier.slice(1))}` : "";
+    const reachLabel = c.audience_reach ? ` · ${esc(c.audience_reach)}` : (c.tier ? ` · ${esc(c.tier.charAt(0).toUpperCase() + c.tier.slice(1))}` : "");
     const sc = c.scores;
     const scoreCells = sc ? `<div class="score-grid">${[
-      ["Hook", sc.hook], ["Pacing", sc.pacing], ["Payoff", sc.payoff], ["Clarity", sc.clarity]
+      ["1-2s Hook", sc.hook], ["Completion", sc.pacing], ["Payoff/Twist", sc.payoff],
+      ["Share/Debate", sc.shareability ?? sc.hook], ["One Beat", sc.focus ?? sc.pacing], ["Strangers", sc.clarity]
     ].map(([k, v]) => {
       const n = Math.max(0, Math.min(100, Number(v ?? 0)));
       const col = n >= 80 ? "var(--brand)" : n >= 65 ? "#34D399" : "var(--dim)";
       return `<div class="score-cell"><span class="sk">${k}</span><span class="sv">${n}</span><span class="score-bar"><i style="width:${n}%;background:${col}"></i></span></div>`;
     }).join("")}</div>` : "";
-    const ssBox = c.scroll_stopper ? `<div class="ss-quote"><b>0–3s Hook</b>“${esc(c.scroll_stopper)}”</div>` : "";
+    const metaPills = [
+      c.share_trigger ? `<span class="ss-pill">Share: ${esc(c.share_trigger)}</span>` : "",
+      c.loop_seamless ? `<span class="ss-pill">Seamless Loop</span>` : ""
+    ].filter(Boolean).join(" ");
+    const ssBox = (c.scroll_stopper || metaPills) ? `<div class="ss-quote">${metaPills ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${c.scroll_stopper ? "6px" : "0"}">${metaPills}</div>` : ""}${c.scroll_stopper ? `<b>0–2s Hook</b>“${esc(c.scroll_stopper)}”` : ""}</div>` : "";
     dlg.innerHTML = `<div class="editor"><div class="stage" id="stage">${stage}</div>
       <div class="panel">
-        <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score + tierLabel : "Clipped by hand"}</span>
+        <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score + reachLabel : "Clipped by hand"}</span>
           <p class="sub" style="margin-top:8px">${esc(c.reason || "")}</p></div><button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button></div>
         ${scoreCells}${ssBox}
         <h3>On the video</h3>
