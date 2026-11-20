@@ -15,12 +15,15 @@ _lock = threading.Lock()
 state = {"doing": False, "percent": 0, "error": ""}
 
 
-def ready() -> bool:
-    """Is the whole model there: the word list and all three parts?"""
-    d = config.ASR_MODEL_DIR
+def _has_model(d) -> bool:
     if not (d / "tokens.txt").is_file():
         return False
     return all(any(d.glob(f"{part}*.onnx")) for part in ("encoder", "decoder", "joiner"))
+
+
+def ready() -> bool:
+    """Is the whole model there: the word list and all three parts?"""
+    return _has_model(config.ASR_MODEL_DIR)
 
 
 def _progress(blocks, size, total):
@@ -36,6 +39,20 @@ def ensure() -> None:
     with _lock:
         if ready():
             return
+        if config.COLAB_MODE and config.DURABLE_DIR.resolve() != config.DATA_DIR.resolve():
+            durable_model = config.DURABLE_DIR / "models" / config.ASR_MODEL_NAME
+            if _has_model(durable_model):
+                local_tmp = config.MODELS_DIR / "speech-model.restoring"
+                try:
+                    config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                    shutil.rmtree(local_tmp, ignore_errors=True)
+                    shutil.copytree(str(durable_model), str(local_tmp))
+                    shutil.rmtree(config.ASR_MODEL_DIR, ignore_errors=True)
+                    local_tmp.rename(config.ASR_MODEL_DIR)
+                    print("  Restored speech model from Google Drive cache.\n", flush=True)
+                    return
+                except OSError:
+                    shutil.rmtree(local_tmp, ignore_errors=True)
         state.update(doing=True, percent=0, error="")
         print("\n  Downloading the speech model (one time, about 480 MB)...\n", flush=True)
         config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -53,6 +70,19 @@ def ensure() -> None:
                 raise OSError("the download did not contain the model")
             shutil.rmtree(config.ASR_MODEL_DIR, ignore_errors=True)        # a half-finished one from before
             got.rename(config.ASR_MODEL_DIR)
+            if config.COLAB_MODE and config.DURABLE_DIR.resolve() != config.DATA_DIR.resolve():
+                try:
+                    durable_models = config.DURABLE_DIR / "models"
+                    durable_models.mkdir(parents=True, exist_ok=True)
+                    durable_model = durable_models / config.ASR_MODEL_NAME
+                    cache_tmp = durable_models / "speech-model.caching"
+                    shutil.rmtree(cache_tmp, ignore_errors=True)
+                    shutil.copytree(str(config.ASR_MODEL_DIR), str(cache_tmp))
+                    shutil.rmtree(durable_model, ignore_errors=True)
+                    cache_tmp.rename(durable_model)
+                    print("  Cached speech model to Google Drive.\n", flush=True)
+                except OSError:
+                    pass
             print("  Speech model ready.\n", flush=True)
         except Exception as e:  # noqa: BLE001
             state["error"] = str(e)[-200:]
