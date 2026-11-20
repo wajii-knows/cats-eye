@@ -64,7 +64,8 @@ def main() -> int:
                 ("resumable pipeline stages and contracts", ["tests/test_pipeline_stages.py"]),
                 ("colab durable store, checkpoints and recovery", ["tests/test_colab_checkpoints.py"]),
                 ("visual understanding pipeline, APIs and fault resume", ["tests/test_visual_pipeline.py", BASE]),
-                ("viral scoring, scroll-stopper hooks, and clip length", ["tests/test_viral_scoring.py"])]
+                ("viral scoring, scroll-stopper hooks, and clip length", ["tests/test_viral_scoring.py"]),
+                ("pause, resume, and remove controls for processing videos", ["tests/test_job_controls.py"])]
         for name, args in runs:
             print(f"\n=== {name} ===", flush=True)
             r = subprocess.run([sys.executable, *args], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")

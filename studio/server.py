@@ -1055,10 +1055,28 @@ def rerender(jid: str, cid: str, body: dict = Body(...)):
 @app.delete("/api/jobs/{jid}")
 def delete_job(jid: str):
     job = _job_or_404(jid)
-    if job["status"] in ("queued", "running", "live") or jid in live.SESSIONS:
-        raise HTTPException(409, "This is still being worked on. Stop it or wait for it to finish first.")
+    if job["status"] == "live" or jid in live.SESSIONS:
+        raise HTTPException(409, "Stop the live recording first.")
     jobs.delete(jid)
     return {"ok": True}
+
+
+@app.post("/api/jobs/{jid}/pause")
+def pause_job(jid: str):
+    job = _job_or_404(jid)
+    if job["status"] == "live" or jid in live.SESSIONS:
+        raise HTTPException(409, "Live recordings cannot be paused. Press Stop instead.")
+    if not jobs.pause(jid):
+        raise HTTPException(409, "This video is not currently processing.")
+    return jobs.public(job)
+
+
+@app.post("/api/jobs/{jid}/resume")
+def resume_job(jid: str):
+    job = _job_or_404(jid)
+    if not jobs.resume(jid):
+        raise HTTPException(409, "This video is not paused.")
+    return jobs.public(job)
 
 
 @app.post("/api/jobs/{jid}/cancel")
