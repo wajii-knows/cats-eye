@@ -1,6 +1,6 @@
-# Putting PeakCut on a server
+# Putting Cat's Eye on a server
 
-PeakCut runs as three containers on one Linux server: the app, PostgreSQL, and Caddy (which handles HTTPS).
+Cat's Eye runs as three containers on one Linux server: the app, PostgreSQL, and Caddy (which handles HTTPS).
 
 ## What you need
 

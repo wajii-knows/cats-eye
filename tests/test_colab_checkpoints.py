@@ -187,22 +187,26 @@ def run_all_tests():
             b_blocked = True
         check("Active lease rejects second session (ActiveLeaseError)", b_blocked)
 
-        # Force takeover
+        # Force takeover & deposed heartbeat self-termination
         res_b_forced = lease_b.acquire(force=True)
         check("Force takeover succeeds", res_b_forced["session_id"] == "session_beta")
+        time.sleep(0.45)
+        check("Deposed session stopped overwriting lease", lease_b.read_lease()["session_id"] == "session_beta")
+        check("Deposed session heartbeat stopped automatically", not lease_a._heartbeat_thread or not lease_a._heartbeat_thread.is_alive())
 
         # Stale takeover: simulate lease older than 180 seconds
         lease_a.stop_heartbeat()
+        lease_b.stop_heartbeat()
         lease_file = l_dir / "lease.json"
         stale_data = {
             "session_id": "session_old",
             "created_at": time.time() - 500,
-            "last_heartbeat": time.time() - 300,  # 5 minutes ago
+            "heartbeat_at": time.time() - 300,  # 5 minutes ago
             "hostname": "old-colab-worker",
         }
         lease_file.write_text(json.dumps(stale_data), encoding="utf-8")
 
-        lease_c = SessionLease(l_dir, session_id="session_gamma")
+        lease_c = SessionLease(l_dir, session_id="session_gamma", heartbeat_interval=0.2)
         res_c = lease_c.acquire()
         check("Stale lease (> 3 minutes) taken over automatically", res_c["session_id"] == "session_gamma")
 
@@ -359,7 +363,11 @@ def run_all_tests():
         ctx1.checkpoint("chunk_0", {"start": 0.0, "end": 300.0, "words": [{"w": "Hello", "s": 0.5, "e": 0.9}]})
         ctx1.checkpoint("chunk_1", {"start": 300.0, "end": 600.0, "words": [{"w": "World", "s": 301.0, "e": 301.5}]})
 
-        # Simulate fresh session resuming
+        # Wipe local checkpoints directory to simulate Colab local disk loss
+        shutil.rmtree(c_dir / "checkpoints", ignore_errors=True)
+        check("Local checkpoints dir removed before resume", not (c_dir / "checkpoints").exists())
+
+        # Simulate fresh session resuming from Drive durable store
         ctx2 = StageContext(
             job=job,
             user_dir=c_dir,
@@ -370,8 +378,17 @@ def run_all_tests():
 
         c0 = ctx2.resume_state("chunk_0")
         c1 = ctx2.resume_state("chunk_1")
-        check("Resumed chunk 0 matches saved state", c0 is not None and c0["words"][0]["w"] == "Hello")
-        check("Resumed chunk 1 matches saved state", c1 is not None and c1["words"][0]["w"] == "World")
+        check("Resumed chunk 0 matches saved state from Drive", c0 is not None and c0["words"][0]["w"] == "Hello")
+        check("Resumed chunk 1 matches saved state from Drive", c1 is not None and c1["words"][0]["w"] == "World")
+
+        # Cross-user ArtifactStore isolation check
+        store_b = ArtifactStore(user_dir=c_dir / "other_user", user_id="u_other")
+        f_iso = c_dir / "iso.txt"
+        f_iso.write_text("user_a_secret", encoding="utf-8")
+        fp_iso = "a" * 64
+        store.put("transcribe", fp_iso, {"iso.txt": f_iso}, metadata={})
+        check("User B cannot read User A artifact", store_b.get(fp_iso) is None)
+        check("User A artifact survives User B delete attempt", store_b.delete(fp_iso) and store.get(fp_iso) is not None)
 
     print("\n=== 9. Secrets Absence Rule ===")
     with tempfile.TemporaryDirectory(prefix="test_sec_") as tmp_s:
@@ -442,6 +459,116 @@ def run_all_tests():
         finally:
             config.OWNER_PASSWORD = orig_pw
             config.COLAB_MODE = orig_colab_mode
+
+    print("\n=== 11. Colab HTTP Gate, Checkpoint Restore Ordering & APIs ===")
+    import subprocess
+    import urllib.error
+    import urllib.request
+    import http.cookiejar
+
+    with tempfile.TemporaryDirectory(prefix="test_colab_srv_") as tmp_srv:
+        srv_dir = Path(tmp_srv)
+        w_dir = srv_dir / "work"
+        d_dir = srv_dir / "durable"
+        w_dir.mkdir(parents=True, exist_ok=True)
+        d_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-seed a Drive checkpoint before booting studio.server
+        seed_db = srv_dir / "seed.db"
+        import sqlalchemy as sa
+        from studio.db import migrate, users as db_users
+        seed_eng = sa.create_engine(f"sqlite:///{seed_db.as_posix()}")
+        migrate.run_all(seed_eng)
+        with seed_eng.begin() as conn:
+            conn.execute(db_users.insert().values(id="u_local", email="you@localhost", name="RestoredOwner", is_admin=True, created_at=time.time()))
+        seed_eng.dispose()
+        seed_dur = LocalFolderStore(d_dir)
+        seed_mgr = DatabaseCheckpointManager(seed_db, seed_dur)
+        seed_mgr.create_checkpoint(reason="preseeded")
+
+        colab_port = 8798
+        base_colab = f"http://127.0.0.1:{colab_port}"
+        srv_env = {
+            **os.environ,
+            "PEAKCUT_COLAB": "1",
+            "PEAKCUT_WORK_DIR": str(w_dir),
+            "PEAKCUT_DURABLE_DIR": str(d_dir),
+            "PEAKCUT_OWNER_PASSWORD": "colab-test-pw-999",
+            "PEAKCUT_PORT": str(colab_port),
+            "PEAKCUT_HOST": "127.0.0.1",
+            "PEAKCUT_PUBLIC_URL": base_colab,
+            "PEAKCUT_AUTO_RELOAD": "0",
+            "PEAKCUT_FETCH_MODEL": "0",
+            "PEAKCUT_UPDATE_CHECK": "0",
+            "PEAKCUT_ACCOUNTS": "0",
+            "DATABASE_URL": "",
+        }
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "studio.server"],
+            cwd=str(ROOT),
+            env=srv_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            up_ok = False
+            for _ in range(45):
+                try:
+                    if urllib.request.urlopen(f"{base_colab}/healthz", timeout=2).status == 200:
+                        up_ok = True
+                        break
+                except Exception:
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.5)
+            check("Colab server starts and passes healthz", up_ok)
+
+            if up_ok:
+                jar = http.cookiejar.CookieJar()
+                opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+                def call_http(method, path, data=None):
+                    req = urllib.request.Request(
+                        f"{base_colab}{path}",
+                        data=(json.dumps(data).encode() if data is not None else None),
+                        method=method,
+                        headers={"Content-Type": "application/json", "Origin": base_colab},
+                    )
+                    try:
+                        with opener.open(req, timeout=10) as r:
+                            return r.status, json.loads(r.read().decode())
+                    except urllib.error.HTTPError as e:
+                        body = e.read().decode()
+                        try:
+                            return e.code, json.loads(body)
+                        except Exception:
+                            return e.code, {"raw": body}
+
+                st_signup, _ = call_http("POST", "/api/auth/signup", {"email": "attacker@evil.com", "password": "Password123"})
+                check("POST /api/auth/signup blocked with 404 in COLAB_MODE", st_signup == 404)
+
+                st_unauth, _ = call_http("GET", "/api/colab/status")
+                check("GET /api/colab/status rejects unauthenticated client (401)", st_unauth == 401)
+
+                st_bad, _ = call_http("POST", "/api/colab/login", {"password": "wrong-password"})
+                check("POST /api/colab/login rejects wrong password (401)", st_bad == 401)
+
+                st_login, d_login = call_http("POST", "/api/colab/login", {"password": "colab-test-pw-999"})
+                check("POST /api/colab/login succeeds with owner password", st_login == 200 and d_login["user"]["name"] == "RestoredOwner")
+
+                st_status, d_status = call_http("GET", "/api/colab/status")
+                check("GET /api/colab/status succeeds when authenticated", st_status == 200 and d_status.get("colab_mode") is True)
+                check("Drive DB checkpoint restored before db.init()", d_status.get("recovery", {}).get("recovered") is True)
+
+                st_cp, d_cp = call_http("POST", "/api/colab/checkpoint", {})
+                check("POST /api/colab/checkpoint creates verified snapshot", st_cp == 200 and d_cp.get("ok") is True and d_cp["checkpoint"]["generation"] >= 2)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
 
     print(f"\n==========================================")
     print(f"Colab Checkpoint Tests Complete: {len(fails)} failures.")

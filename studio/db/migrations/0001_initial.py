@@ -28,12 +28,7 @@ INITIAL_TABLES = [
 
 
 def up(conn: sa.Connection) -> None:
-    insp = sa.inspect(conn)
-    # Idempotent check: if users table already exists, the initial schema is present
-    if insp.has_table("users"):
-        return
-
-    # Create tables in dependency order (users first, then children)
+    # Create tables in dependency order (users first, then children) idempotently
     for table in reversed(INITIAL_TABLES):
         table.create(conn, checkfirst=True)
 

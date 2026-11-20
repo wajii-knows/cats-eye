@@ -34,7 +34,7 @@ class ColabManager:
     ):
         self.work_dir = Path(work_dir or config.WORK_DIR).resolve()
         self.durable_dir = Path(durable_dir or config.DURABLE_DIR).resolve()
-        self.session_id = session_id or f"colab-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+        self.session_id = session_id or os.environ.get("PEAKCUT_COLAB_SESSION_ID") or f"colab-{int(time.time())}-{uuid.uuid4().hex[:6]}"
         self.boot_time = time.time()
 
         self.durable_store: DurableStore = (
@@ -127,13 +127,13 @@ class ColabManager:
         recent_gens = sorted(gens, reverse=True)[:5]
         checkpoints_info = []
         for g in recent_gens:
-            st = self.durable_store.stat(f"db/gen-{g}.sqlite")
+            st = self.durable_store.stat(f"db/gen-{g:04d}.sqlite") or self.durable_store.stat(f"db/gen-{g}.sqlite")
             if st:
                 checkpoints_info.append({
                     "generation": g,
                     "sha256": st.get("sha256", ""),
                     "size": st.get("size", 0),
-                    "created_at": st.get("updated_at", 0),
+                    "created_at": st.get("created_at", st.get("updated_at", 0)),
                     "verified": True,
                 })
 
@@ -155,7 +155,7 @@ class ColabManager:
                 "session_id": self.session_id,
                 "current_holder": lease_data.get("session_id"),
                 "holder_host": lease_data.get("hostname"),
-                "last_heartbeat": lease_data.get("last_heartbeat"),
+                "last_heartbeat": lease_data.get("heartbeat_at") or lease_data.get("last_heartbeat"),
             },
             "recovery": {
                 "recovered": self.recovered_from_checkpoint,

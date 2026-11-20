@@ -88,6 +88,12 @@ def busy() -> bool:
     if _force is not None:
         return _force
     start()
+    if config.COLAB_MODE and config.DURABLE_DIR.exists():
+        try:
+            if shutil.disk_usage(config.DURABLE_DIR).free / 1e9 < config.DRIVE_MIN_FREE_GB:
+                return True
+        except OSError:
+            pass
     return _state["cpu"] >= BUSY_CPU or _state["ram_free"] < MIN_FREE_RAM_GB
 
 
@@ -98,5 +104,13 @@ def disk_full() -> bool:
 
 def state() -> dict:
     start()
-    return {"cpu": round(_state["cpu"]), "ram_free_gb": round(_state["ram_free"], 1), "disk_free_gb": round(_state["disk_free"], 1),
-            "busy": busy(), "busy_cpu": BUSY_CPU}
+    out = {"cpu": round(_state["cpu"]), "ram_free_gb": round(_state["ram_free"], 1), "disk_free_gb": round(_state["disk_free"], 1),
+           "busy": busy(), "busy_cpu": BUSY_CPU}
+    if config.COLAB_MODE and config.DURABLE_DIR.exists():
+        try:
+            df = shutil.disk_usage(config.DURABLE_DIR).free / 1e9
+            out["drive_free_gb"] = round(df, 1)
+            out["drive_low_space"] = df < config.DRIVE_MIN_FREE_GB
+        except OSError:
+            pass
+    return out

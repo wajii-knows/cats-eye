@@ -257,7 +257,20 @@ class LocalFolderStore(DurableStore):
             local_tar = Path(tmp_unpack) / Path(norm_rel).name
             self.get_file(norm_rel, local_tar)
             with tarfile.open(local_tar, "r") as tar:
-                tar.extractall(path=str(dest_dir))
+                safe_members = []
+                for m in tar.getmembers():
+                    if not (m.isfile() or m.isdir()):
+                        continue
+                    if os.path.isabs(m.name) or m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts:
+                        raise IntegrityError(f"Unsafe tar member path: {m.name!r}")
+                    target = (dest_dir / m.name).resolve()
+                    if not target.is_relative_to(dest_dir):
+                        raise IntegrityError(f"Tar member escapes destination: {m.name!r}")
+                    safe_members.append(m)
+                try:
+                    tar.extractall(path=str(dest_dir), members=safe_members, filter="data")
+                except TypeError:
+                    tar.extractall(path=str(dest_dir), members=safe_members)
         return dest_dir
 
     def exists(self, durable_rel_path: str) -> bool:

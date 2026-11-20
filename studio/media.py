@@ -344,19 +344,23 @@ def extract_snapshots(video_path: Path, out_dir: Path, start: float = 0.0, end: 
         if dur < 1.0:
             return []
         step = max(float(interval_sec), dur / max(1, max_snapshots))
-        snap_pat = out_dir / "snap_%04d.jpg"
-        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-to", f"{end:.2f}",
-             "-i", str(video_path), "-vf", f"fps=1/{step:.2f},scale=360:-2", "-q:v", "5", str(snap_pat)])
-        files = sorted(out_dir.glob("snap_*.jpg"))
         snaps = []
         import base64
-        for i, f in enumerate(files[:max_snapshots]):
+        i = 0
+        while i < max_snapshots:
             t = round(start + i * step, 2)
+            if t >= end - 0.1:
+                break
+            snap_file = out_dir / f"snap_{i + 1:04d}.jpg"
             try:
-                b64 = base64.b64encode(f.read_bytes()).decode("ascii")
-                snaps.append({"time": t, "path": str(f), "data": b64, "mime": "image/jpeg"})
+                run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video_path),
+                     "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "5", str(snap_file)])
+                if snap_file.is_file():
+                    b64 = base64.b64encode(snap_file.read_bytes()).decode("ascii")
+                    snaps.append({"time": t, "path": str(snap_file), "data": b64, "mime": "image/jpeg"})
             except Exception:
                 pass
+            i += 1
         return snaps
     except Exception:
         return []

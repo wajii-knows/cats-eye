@@ -49,17 +49,19 @@ class RenderClipStage(Stage):
         expected_mp4 = out_dir / f"{clip_name}.mp4"
         expected_jpg = out_dir / f"{clip_name}.jpg"
         expected_ass = out_dir / f"{clip_name}.ass"
+        job_id = ctx.job.get("id", "job")
+        durable_prefix = f"users/{ctx.user_id}/jobs/{job_id}/clips/{clip_name}"
 
         # Check durable store for existing finished render
         if ctx.durable_store and not expected_mp4.is_file():
-            rel_mp4 = f"clips/{clip_name}/{clip_name}.mp4"
+            rel_mp4 = f"{durable_prefix}/{clip_name}.mp4"
             if ctx.durable_store.exists(rel_mp4):
                 try:
                     ctx.durable_store.get_file(rel_mp4, expected_mp4)
-                    if ctx.durable_store.exists(f"clips/{clip_name}/{clip_name}.jpg"):
-                        ctx.durable_store.get_file(f"clips/{clip_name}/{clip_name}.jpg", expected_jpg)
-                    if ctx.durable_store.exists(f"clips/{clip_name}/{clip_name}.ass"):
-                        ctx.durable_store.get_file(f"clips/{clip_name}/{clip_name}.ass", expected_ass)
+                    if ctx.durable_store.exists(f"{durable_prefix}/{clip_name}.jpg"):
+                        ctx.durable_store.get_file(f"{durable_prefix}/{clip_name}.jpg", expected_jpg)
+                    if ctx.durable_store.exists(f"{durable_prefix}/{clip_name}.ass"):
+                        ctx.durable_store.get_file(f"{durable_prefix}/{clip_name}.ass", expected_ass)
                     res = {"file": expected_mp4.name, "cover": expected_jpg.name, "layout": clip.get("layout", "crop")}
                     return {
                         "rendered_video": str(expected_mp4),
@@ -89,10 +91,10 @@ class RenderClipStage(Stage):
 
         if ctx.durable_store:
             try:
-                ctx.durable_store.put_file(mp4_path, f"clips/{clip_name}/{mp4_path.name}")
-                ctx.durable_store.put_file(jpg_path, f"clips/{clip_name}/{jpg_path.name}")
+                ctx.durable_store.put_file(mp4_path, f"{durable_prefix}/{mp4_path.name}")
+                ctx.durable_store.put_file(jpg_path, f"{durable_prefix}/{jpg_path.name}")
                 if ass_path.is_file():
-                    ctx.durable_store.put_file(ass_path, f"clips/{clip_name}/{ass_path.name}")
+                    ctx.durable_store.put_file(ass_path, f"{durable_prefix}/{ass_path.name}")
             except Exception as e:
                 logger.warning("Could not persist rendered clip to Drive: %s", e)
 

@@ -56,9 +56,10 @@ class FetchStage(Stage):
                 raise StageError("DOWNLOAD_AUDIO_FAILED", f"Failed downloading audio: {e}", retryable=True) from e
 
             video_file = media.download(url, d, int(opts.get("quality", 1080) or 1080))
+            rel_src = f"users/{ctx.user_id}/jobs/{ctx.job.get('id', 'job')}/sources/{video_file.name}"
             if ctx.durable_store:
                 try:
-                    ctx.durable_store.put_file(video_file, f"sources/{video_file.name}")
+                    ctx.durable_store.put_file(video_file, rel_src)
                     ctx.job["source_durable"] = True
                 except Exception as e:
                     logger.warning("Could not persist source video to Drive: %s", e)
@@ -73,21 +74,22 @@ class FetchStage(Stage):
         else:
             # Uploaded or local video
             path = Path(src.get("path", ""))
+            rel_src = f"users/{ctx.user_id}/jobs/{ctx.job.get('id', 'job')}/sources/{path.name}"
             if not path.is_file():
                 # If missing locally in Colab mode, check durable store
-                if ctx.durable_store and ctx.durable_store.exists(f"sources/{path.name}"):
+                if ctx.durable_store and ctx.durable_store.exists(rel_src):
                     try:
                         path.parent.mkdir(parents=True, exist_ok=True)
-                        ctx.durable_store.get_file(f"sources/{path.name}", path)
+                        ctx.durable_store.get_file(rel_src, path)
                     except Exception as e:
                         logger.warning("Could not restore source from Drive: %s", e)
 
             if not path.is_file():
                 raise StageError("FILE_NOT_FOUND", f"Uploaded video file not found: {path}")
 
-            if ctx.durable_store and not ctx.durable_store.exists(f"sources/{path.name}"):
+            if ctx.durable_store and not ctx.durable_store.exists(rel_src):
                 try:
-                    ctx.durable_store.put_file(path, f"sources/{path.name}")
+                    ctx.durable_store.put_file(path, rel_src)
                     ctx.job["source_durable"] = True
                 except Exception as e:
                     logger.warning("Could not persist uploaded video to Drive: %s", e)

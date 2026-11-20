@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import wave
 from pathlib import Path
 from typing import Any, Dict, List
+
+import numpy as np
 
 from studio import config, media, transcribe
 from studio.contracts import Word, TranscriptSegment
@@ -46,29 +49,23 @@ class TranscribeStage(Stage):
             fetch_model.ensure()
 
         try:
-            audio = media.load_audio(Path(wav))
-            total_samples = len(audio)
             CHUNK_SAMPLES = 5 * 60 * 16000  # 5 minutes of 16kHz mono audio
-
-            if total_samples <= CHUNK_SAMPLES:
-                saved = ctx.resume_state("chunk_0")
-                if saved and "words" in saved:
-                    words = saved["words"]
-                else:
-                    words = transcribe.transcribe(audio)
-                    ctx.checkpoint("chunk_0", {"words": words, "chunk_index": 0})
-            else:
+            with wave.open(str(wav), "rb") as wf:
+                rate = wf.getframerate() or 16000
+                total_samples = wf.getnframes()
                 words = []
-                chunks = [(i, i + CHUNK_SAMPLES) for i in range(0, total_samples, CHUNK_SAMPLES)]
-                for idx, (c_start, c_end) in enumerate(chunks):
-                    slice_end = min(total_samples, c_end)
+                num_chunks = max(1, (total_samples + CHUNK_SAMPLES - 1) // CHUNK_SAMPLES)
+                for idx in range(num_chunks):
+                    c_start = idx * CHUNK_SAMPLES
+                    take = min(CHUNK_SAMPLES, max(0, total_samples - c_start))
                     chk_key = f"chunk_{idx}"
                     saved = ctx.resume_state(chk_key)
                     if saved and "words" in saved:
                         chunk_words = saved["words"]
                     else:
-                        sub_audio = audio[c_start:slice_end]
-                        shift_sec = c_start / 16000.0
+                        wf.setpos(c_start)
+                        sub_audio = np.frombuffer(wf.readframes(take), dtype=np.int16) if take > 0 else np.zeros(0, dtype=np.int16)
+                        shift_sec = c_start / float(rate)
                         raw_words = transcribe.transcribe(sub_audio)
                         chunk_words = [
                             dict(w, s=round(w.get("s", 0) + shift_sec, 2), e=round(w.get("e", 0) + shift_sec, 2))

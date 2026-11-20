@@ -6,6 +6,7 @@ import re
 import secrets
 import threading
 import time
+from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -246,7 +247,10 @@ def local_user():
     global _local
     if _local is None:
         with db.engine.begin() as c:
-            u = c.execute(sa.select(db.users).order_by(db.users.c.created_at).limit(1)).first()
+            if config.COLAB_MODE:
+                u = c.execute(sa.select(db.users).where(db.users.c.id == LOCAL_ID)).first()
+            else:
+                u = c.execute(sa.select(db.users).order_by(db.users.c.created_at).limit(1)).first()
             if not u:
                 c.execute(db.users.insert().values(id=LOCAL_ID, email="you@localhost", name="You", is_admin=True, created_at=time.time()))
             elif not u.is_admin or u.disabled:
@@ -331,12 +335,13 @@ def end_session(token: str):
         c.execute(db.sessions.delete().where(db.sessions.c.token_hash == _h(token)))
 
 
-def cookie_args(token: str) -> dict:
-    if config.COLAB_MODE:       # Colab serves the app through an https proxy, sometimes inside a frame: the cookie must survive that
+def cookie_args(token: str, https: Optional[bool] = None) -> dict:
+    use_https = config.HTTPS if https is None else https
+    if config.COLAB_MODE and (use_https or https is None):       # Colab serves the app through an https proxy, sometimes inside a frame: the cookie must survive that
         return {"key": COOKIE, "value": token, "max_age": config.SESSION_DAYS * 86400, "httponly": True,
                 "samesite": "none", "secure": True, "path": "/"}
     return {"key": COOKIE, "value": token, "max_age": config.SESSION_DAYS * 86400, "httponly": True,
-            "samesite": "lax", "secure": config.HTTPS, "path": "/"}
+            "samesite": "lax", "secure": use_https, "path": "/"}
 
 
 # ---------------------------------------------------------------- Sign in with Google

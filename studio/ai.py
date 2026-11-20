@@ -245,15 +245,38 @@ def _parse(text):
 
 
 # ---------------------------------------------------------------- one call
+def supports_images(prov: str = None, model: str = "") -> bool:
+    """Lookup whether the selected provider and model support multimodal image inputs."""
+    p = ALIASES.get((prov or provider()).lower(), (prov or provider()).lower())
+    m = (model or "").lower()
+    if p == "gemini":
+        return not any(tok in m for tok in ("embedding", "aqa"))
+    if p == "openai":
+        return any(tok in m for tok in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "vision"))
+    if p == "anthropic":
+        return any(tok in m for tok in ("claude-3", "claude-4", "sonnet-4", "opus-4", "haiku-4"))
+    if p == "xai":
+        return any(tok in m for tok in ("vision", "grok-4", "grok-2-vision"))
+    if p == "openrouter":
+        return any(tok in m for tok in ("gemini", "gpt-4o", "gpt-4.1", "claude-3", "claude-4", "vision"))
+    return False
+
+
 def call(model: str, prompt: str, schema: dict, images: list = None):
     """Ask one model. Returns (the parsed JSON answer, tokens sent, tokens written back)."""
-    how = PROVIDERS[provider()][2]
+    prov = provider()
+    how = PROVIDERS[prov][2]
     fn = {"gemini": _gemini, "openai": _openai, "anthropic": _anthropic}[how]
-    if images:
+    if images and supports_images(prov, model):
         try:
             return fn(model, prompt, schema, images=images)
-        except Exception:
-            pass  # if multimodal fails (unsupported by model), fall back to text
+        except AIError as e:
+            msg = str(e).lower()
+            if ("http 400" in msg or "http 422" in msg) and any(
+                k in msg for k in ("image", "vision", "multimodal", "modality", "inlinedata", "image_url")
+            ):
+                return fn(model, prompt, schema)
+            raise
     return fn(model, prompt, schema)
 
 

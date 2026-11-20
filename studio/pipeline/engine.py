@@ -221,14 +221,19 @@ class PipelineEngine:
             cached_manifest = ctx.store.get(fp, stage=stage.name)
             d_store = self.durable_store or ctx.durable_store
             if not cached_manifest and d_store:
-                rel_pack = f"artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar"
-                if d_store.exists(rel_pack):
-                    try:
-                        dest_local = ctx.store.root / stage.name / fp[:2] / fp
-                        d_store.get_dir_unpacked(rel_pack, dest_local)
-                        cached_manifest = ctx.store.get(fp, stage=stage.name)
-                    except Exception as e:
-                        logger.warning("Error restoring artifact from durable store: %s", e)
+                for rel_pack in (
+                    f"users/{ctx.user_id}/artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
+                    f"artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
+                ):
+                    if d_store.exists(rel_pack):
+                        try:
+                            dest_local = ctx.store.root / stage.name / fp[:2] / fp
+                            d_store.get_dir_unpacked(rel_pack, dest_local)
+                            cached_manifest = ctx.store.get(fp, stage=stage.name)
+                            if cached_manifest:
+                                break
+                        except Exception as e:
+                            logger.warning("Error restoring artifact from durable store: %s", e)
 
             if cached_manifest:
                 self._log_event(
@@ -258,7 +263,22 @@ class PipelineEngine:
                     "fingerprint": fp,
                 }
                 ctx.upstream_fingerprints[stage.name] = fp
-                cached_outputs = cached_manifest.get("metadata", {}).get("outputs", {})
+                cached_outputs = dict(cached_manifest.get("metadata", {}).get("outputs", {}))
+                art_dir = cached_manifest.get("_dir")
+                if art_dir:
+                    art_path = Path(art_dir)
+                    for k, v in list(cached_outputs.items()):
+                        if isinstance(v, str):
+                            cand = art_path / Path(v).name
+                            if cand.is_file():
+                                cached_outputs[k] = str(cand)
+                    if "transcript_words" not in cached_outputs and (art_path / "words.json").is_file():
+                        try:
+                            cached_outputs["transcript_words"] = json.loads(
+                                (art_path / "words.json").read_text(encoding="utf-8")
+                            )
+                        except Exception:
+                            pass
                 ctx.inputs.update(cached_outputs)
                 if progress_cb:
                     progress_cb(stage_index / total_stages, f"{stage.name} (cached)")
@@ -395,13 +415,24 @@ class PipelineEngine:
         end_mem = get_process_memory_mb()
         mem_delta = round(end_mem - start_mem, 2)
 
-        # 5. Persist output artifacts if cacheable
+        # 5. Persist output artifacts if cacheable (skip raw media > 50MB and inline transcript words)
         files_to_store = {}
         for k, v in outputs.items():
+            if k in ("source_video", "audio_wav", "audio_file"):
+                continue
             if isinstance(v, (str, Path)) and Path(v).is_file():
                 p = Path(v)
-                # Key by filename
-                files_to_store[p.name] = p
+                try:
+                    if p.stat().st_size <= 50 * 1024 * 1024:
+                        files_to_store[p.name] = p
+                except OSError:
+                    pass
+
+        meta_outputs = {
+            k: str(v) if isinstance(v, Path) else v
+            for k, v in outputs.items()
+            if k != "transcript_words"
+        }
 
         if stage.cacheable:
             try:
@@ -409,7 +440,7 @@ class PipelineEngine:
                     stage=stage.name,
                     fingerprint=fp,
                     files=files_to_store,
-                    metadata={"outputs": {k: str(v) if isinstance(v, Path) else v for k, v in outputs.items()}},
+                    metadata={"outputs": meta_outputs},
                     version=stage.version,
                 )
             except Exception as e:
@@ -423,7 +454,7 @@ class PipelineEngine:
                 if dest_local.is_dir():
                     d_store.put_dir_packed(
                         dest_local,
-                        f"artifacts/{stage.name}/{fp[:2]}/{fp}",
+                        f"users/{ctx.user_id}/artifacts/{stage.name}/{fp[:2]}/{fp}",
                         archive_name=f"{fp}.tar",
                     )
                     durable_synced = True

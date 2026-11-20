@@ -324,6 +324,9 @@ def run_all_tests():
     check("stage 4 not yet executed", execution_counts["s4"] == 0)
 
     # SIMULATE SERVER RESTART / CRASH INTERRUPT
+    # Wipe local job outputs so resume must resolve artifacts from ArtifactStore
+    for out_name in ("s1.out", "s2.out", "s3.out"):
+        (test_job_dir / out_name).unlink(missing_ok=True)
     # Create fresh context for resume
     job_resume = {
         "id": "job_dag_1",
@@ -336,7 +339,7 @@ def run_all_tests():
     pctx_resume = StageContext(job=job_resume, user_dir=test_user_dir, user_id="user_1", store=pstore)
 
     # Resume: run all stages 1 through 4
-    engine.execute_stage(stg1, pctx_resume, source_id, stage_index=1, total_stages=4)
+    out1 = engine.execute_stage(stg1, pctx_resume, source_id, stage_index=1, total_stages=4)
     engine.execute_stage(stg2, pctx_resume, source_id, stage_index=2, total_stages=4)
     engine.execute_stage(stg3, pctx_resume, source_id, stage_index=3, total_stages=4)
     engine.execute_stage(stg4, pctx_resume, source_id, stage_index=4, total_stages=4)
@@ -345,9 +348,19 @@ def run_all_tests():
     check("stage 2 skipped_cached on resume", execution_counts["s2"] == 1)
     check("stage 3 skipped_cached on resume", execution_counts["s3"] == 1)
     check("stage 4 ran to completion on resume", execution_counts["s4"] == 1)
+    check("cached stage output resolves inside ArtifactStore", Path(out1["s1_data"]).is_file() and Path(out1["s1_data"]).is_relative_to(pstore.root.resolve()))
 
     check("resumed job records stage 1 cached", job_resume["stages"]["s1"]["cached"] is True)
     check("resumed job records stage 4 freshly computed", job_resume["stages"]["s4"]["cached"] is False)
+
+    print("\n=== Flag-OFF Equivalence Checks ===")
+    from studio import brain, jobs
+    import numpy as np
+    check("jobs.DEFAULTS layout is 'blur' when flags are OFF", jobs.DEFAULTS["layout"] == "blur")
+    tidied = brain._tidy({"score": 80, "hook": "TEST", "title": "Test", "shots": [{"start": 0, "end": 10, "type": "close"}]}, 0.0, 20.0)
+    check("brain._tidy omits multishot shots when PEAKCUT_MULTISHOT is OFF", tidied["shots"] == [])
+    fb_picks = brain.fallback_by_loudness(np.array([1.0] * 30), [{"w": "hello", "s": 2.0, "e": 3.0}], 1, 15, 30.0)
+    check("fallback_by_loudness omits multishot shots when PEAKCUT_MULTISHOT is OFF", bool(fb_picks) and fb_picks[0]["shots"] == [])
 
     print("\n=== Retry on Retryable Errors and Cancellation Cleanup ===")
     attempt_count = [0]
@@ -394,7 +407,7 @@ def run_all_tests():
     check("child process running before cancel", proc.poll() is None)
     cancel_ctx.cancel_event.set()
     cancel_ctx.kill_active_processes()
-    time.sleep(0.2)
+    proc.wait(timeout=5)
     check("child process terminated after cancellation", proc.poll() is not None)
 
     shutil.rmtree(pipe_dir, ignore_errors=True)

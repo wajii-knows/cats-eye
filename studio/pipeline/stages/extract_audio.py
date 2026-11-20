@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import logging
+import wave
 from pathlib import Path
 from typing import Any, Dict
+
+import numpy as np
 
 from studio import media
 from studio.pipeline.stage import Stage, StageContext, StageError
@@ -36,18 +39,33 @@ class ExtractAudioStage(Stage):
 
         try:
             media.extract_audio(Path(audio_in), wav_file)
-            audio = media.load_audio(wav_file)
+            opts = ctx.job.get("options", {})
+            with wave.open(str(wav_file), "rb") as wf:
+                rate = wf.getframerate() or 16000
+                total_frames = wf.getnframes()
+                lo_f = max(0, int((opts.get("range_start") or 0) * rate))
+                hi_f = min(total_frames, int(opts["range_end"] * rate)) if opts.get("range_end") else total_frames
+                wf.setpos(lo_f)
+                rem = max(0, hi_f - lo_f)
+                chunk_secs = 60
+                loud_parts = []
+                while rem > 0:
+                    take = min(rem, chunk_secs * rate)
+                    raw = wf.readframes(take)
+                    if not raw:
+                        break
+                    arr = np.frombuffer(raw, dtype=np.int16)
+                    if len(arr) >= rate:
+                        loud_parts.append(media.loudness_per_second(arr))
+                    rem -= len(arr)
         except Exception as e:
             raise StageError("EXTRACT_AUDIO_FAILED", f"Failed to extract audio: {e}") from e
 
-        opts = ctx.job.get("options", {})
-        lo = int((opts.get("range_start") or 0) * 16000)
-        hi = min(len(audio), int(opts["range_end"] * 16000)) if opts.get("range_end") else len(audio)
-        loudness = media.loudness_per_second(audio[lo:hi])
+        loudness = np.concatenate(loud_parts) if loud_parts else np.zeros(0, dtype=np.float32)
         loudness_list = loudness.tolist() if hasattr(loudness, "tolist") else list(loudness)
 
         return {
             "audio_wav": str(wav_file),
             "loudness_db": loudness_list,
-            "duration": len(audio) / 16000,
+            "duration": total_frames / float(rate),
         }

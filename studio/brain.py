@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 
-from . import ai, config, usage, roman
+from . import ai, config, flags, roman, timeutil, usage
 
 WINDOW_SEC, OVERLAP_SEC = 15 * 60, 60
 
@@ -201,7 +201,7 @@ def _tidy(c, s, e, words=None, db_slice=None):
     tags = [re.sub(r"\W", "", str(h))[:30] for h in tags if isinstance(h, (str, int))]
     hi_words = c.get("highlight_words") if isinstance(c.get("highlight_words"), list) else []
     raw_shots = c.get("shots") if isinstance(c.get("shots"), list) else []
-    shots = plan_multishots(s, e, words=words, db_slice=db_slice, shots_input=raw_shots)
+    shots = plan_multishots(s, e, words=words, db_slice=db_slice, shots_input=raw_shots) if flags.is_on("PEAKCUT_MULTISHOT") else []
     return {
         "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
         "category": cat if cat in CATEGORIES else "other",
@@ -221,7 +221,7 @@ def _same_word(old, new):
 
 
 def _overlaps(s, e, others):
-    return any(min(e, k["end"]) - max(s, k["start"]) > 0.3 * (e - s) for k in others)
+    return timeutil.overlaps(s, e, others, ratio=0.3)
 
 
 def make_lines(words, loud=None, chat=None):
@@ -330,7 +330,7 @@ def fallback_by_loudness(db, words, n, max_len, duration):
         picks.append({"start": s, "end": e, "score": 50, "category": "other", "hook": "WAIT FOR IT",
                       "title": "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
                       "reason": "Picked by loudness because the AI was unavailable.",
-                      "shots": plan_multishots(s, e, words=words, db_slice=z[int(s):int(e)+1] if len(z) > int(s) else None)})
+                      "shots": plan_multishots(s, e, words=words, db_slice=z[int(s):int(e)+1] if len(z) > int(s) else None) if flags.is_on("PEAKCUT_MULTISHOT") else []})
         if len(picks) >= n:
             break
     return picks
@@ -352,7 +352,7 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
         chunk = [l for l in lines if a <= l["s"] < b]
         if len(chunk) < 3:
             continue
-        win_snaps = [s for s in (snapshots or []) if a <= s.get("time", 0.0) <= b]
+        win_snaps = [s for s in (snapshots or []) if a <= s.get("time", 0.0) <= b] if flags.is_on("PEAKCUT_SNAPSHOTS") else []
         vnote = ""
         win_images = None
         if win_snaps:

@@ -876,8 +876,9 @@ dialog[open]{animation:fadein .16s ease}
   <div class="scrim" data-act="menu"></div>
   <main id="main">
     <header class="topbar"><button class="icon-btn menu" data-act="menu" id="menuBtn" aria-label="Open menu"></button>
-      <span id="tpic"></span><div class="titles"><h1 id="title"></h1><p id="subtitle"></p></div><nav class="utabs" id="utabs" role="tablist" aria-label="Creator sections"></nav><div id="colabSyncChip" hidden></div><div class="row" id="actions"></div></header>
-    <div id="vbanner"><div id="colabRecoveryBanner" hidden></div></div>
+      <span id="tpic"></span><div class="titles"><h1 id="title"></h1><p id="subtitle"></p></div><nav class="utabs" id="utabs" role="tablist" aria-label="Creator sections"></nav><button type="button" id="colabSyncChip" hidden></button><div class="row" id="actions"></div></header>
+    <div id="vbanner"></div>
+    <div id="colabRecoveryBanner" hidden></div>
     <div id="heroSlot"></div>
     <div class="content" id="view"></div>
   </main>
@@ -1328,10 +1329,13 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
       <button class="icon-btn bell" data-act="bell" title="Notifications" aria-label="Notifications${S.status.unread ? `, ${S.status.unread} new` : ""}" aria-haspopup="dialog">${ic("bell")}${S.status.unread ? `<span class="dotn">${S.status.unread > 9 ? "9+" : S.status.unread}</span>` : ""}</button></div>` : ""));
   const c = creator();
   const recording = S.creators.filter(x => x.live_job).length;
-  let title = {overview:"Home", library:"All videos", settings:"Settings", usage:"AI usage"}[S.view] || "", sub = "", act = "";
+  let title = {overview:"Home", library:"All videos", clips:"Clips", live:"Live", posting:"Posting", settings:"Settings", usage:"AI usage"}[S.view] || "", sub = "", act = "";
   if (S.view === "usage") sub = "What the AI has been used for.";
   if (S.view === "overview") sub = `${greeting()}. ${S.creators.length} creator${S.creators.length === 1 ? "" : "s"}${recording ? `, ${recording} recording now` : ""}.`;
   if (S.view === "library") sub = "Every video and recording, across all creators.";
+  if (S.view === "clips") sub = "All rendered and queued vertical clips across your studio.";
+  if (S.view === "live") sub = "Monitor and record live streams as they happen.";
+  if (S.view === "posting") sub = "Scheduled and published posts across connected accounts.";
   if (S.view === "settings") sub = (S.status.accounts === false ? "Your AI key and connected apps." : "Your profile, security and connected apps.");
   let pic = "", subHtml = null, tabs = "";
   if (c) {
@@ -1366,7 +1370,7 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   put($("#title"), `<span>${esc(title)}</span>`); put($("#subtitle"), subHtml ?? esc(sub)); put($("#actions"), act);
 }
 
-const ROUTES = {overview: "", library: "videos", settings: "settings", usage: "usage"};
+const ROUTES = {overview: "", library: "videos", clips: "clips", live: "live", posting: "posting", settings: "settings", usage: "usage"};
 function pathFor(v, tab) {
   if (v.startsWith("c:")) return `/app/creators/${encodeURIComponent(v.slice(2))}${tab && tab !== "clips" ? "/" + tab : ""}`;
   if (v === "settings") return "/app/settings" + (tab ? "/" + tab : "");
@@ -1398,15 +1402,13 @@ function go(v, tab, fromHistory) {
       <p>Paste a link or drop in a video. Cat's Eye finds the best moments and builds captioned shorts.</p><div id="add"></div></section>` : "";
   if (v === "overview") view.innerHTML = `<div id="ov"></div>`;
   else if (v === "library") view.innerHTML = `<div id="add"></div><div id="jobs"></div>`;
-  else if (v === "clips") view.innerHTML = `<div id="add"></div><div id="jobs"></div>`;
+  else if (v === "clips") view.innerHTML = `<div id="clipsView"></div>`;
   else if (v === "live") {
     const liveC = S.creators.find(x => x.live_job || liveOn(x).length);
     if (liveC) { S.view = "c:" + liveC.id; S.ctab = "clips"; remember(S.view, S.ctab); setTab("clips"); return; }
     view.innerHTML = `<div class="ce-card" style="padding:var(--ce-space-8);text-align:center;"><div class="ce-empty-state"><div class="ce-empty-icon">${ic("radio")}</div><h3 class="ce-empty-title">No live streams broadcasting</h3><p class="ce-empty-desc">When connected creators go live on Twitch, Kick, or YouTube, Cat's Eye monitors and records them here.</p><button class="ce-btn ce-btn-primary" data-act="newcreator">${ic("plusc")}Add a creator</button></div></div>`;
   }
-  else if (v === "posting") {
-    view.innerHTML = `<div class="ce-card" style="padding:var(--ce-space-8);"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--ce-space-6);"><div><h2 style="font-size:var(--ce-font-2xl);font-weight:700;">Posting Queue</h2><p style="color:var(--ce-text-secondary);font-size:var(--ce-font-sm);">Scheduled and published vertical clips across YouTube Shorts, Instagram Reels, and TikTok.</p></div><button class="ce-btn ce-btn-secondary" data-act="go" data-v="settings" data-tab="apps">${ic("plug")}Manage Accounts</button></div><div class="ce-table-container"><table class="ce-table"><thead><tr><th class="ce-th">Clip</th><th class="ce-th">Platform</th><th class="ce-th">Status</th><th class="ce-th">Scheduled Time</th></tr></thead><tbody><tr><td class="ce-td" colspan="4" style="text-align:center;padding:var(--ce-space-8);color:var(--ce-text-secondary);">No clips queued for automatic posting yet. Open any clip and select Share to queue.</td></tr></tbody></table></div></div>`;
-  }
+  else if (v === "posting") view.innerHTML = `<div id="postingView"></div>`;
   else if (v === "settings") view.innerHTML = `<div id="sform"></div>`;
   else if (v === "usage") { view.innerHTML = `<div id="usage"></div>`; loadUsage(); }
   else view.innerHTML = `<div id="stream"></div><div id="cbody"></div>`;   // the live player stays put across tabs: no restart, no rebuffer
@@ -1415,7 +1417,7 @@ function go(v, tab, fromHistory) {
   if (v === "settings") drawSettings();
   if (v.startsWith("c:")) setTab(S.ctab);
   $("#main").scrollTo(0, 0); render();
-  if (v === "overview") loadOverview();
+  if (v === "overview" || v === "posting") loadOverview();
 }
 function setTab(t) {
   S.ctab = t;
@@ -1805,8 +1807,8 @@ function stagesHtml(j) {
     const isCached = st.cached || st.status === 'skipped_cached';
     const badge = isCached ? '<span class="pill sm" style="background:var(--brand-muted, rgba(245,158,11,0.15));color:var(--brand, #f59e0b);font-weight:600" title="Loaded from cache">⚡ cached</span>' : (st.duration_ms != null ? `<span class="pill sm sub" title="Stage duration">⏱ ${(st.duration_ms / 1000).toFixed(1)}s</span>` : '');
     const icon = st.status === 'done' || isCached ? '✓ ' : (st.status === 'running' ? '● ' : (st.status === 'failed' ? '✕ ' : ''));
-    return `<div class="ce-stage-item ${st.status}" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 10px;border-radius:14px;background:var(--surface-2, #1a1d24);border:1px solid var(--border, #2a2d36)">
-      <span>${icon}${labels[s] || s}</span> ${badge}
+    return `<div class="ce-stage-item ${esc(st.status || "")}" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 10px;border-radius:14px;background:var(--surface-2, #1a1d24);border:1px solid var(--border, #2a2d36)">
+      <span>${icon}${esc(labels[s] || s)}</span> ${badge}
     </div>`;
   });
   if (!items.length) return '';
@@ -2255,9 +2257,34 @@ $("#clipdlg").addEventListener("close", () => { $("#clipdlg").innerHTML = ""; D.
 $("#clipdlg").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
 
 /* ============================================================ render + polling */
+function drawClipsView() {
+  const box = $("#clipsView"); if (!box) return;
+  const pairs = [];
+  S.jobs.forEach(j => (j.clips || []).forEach(c => pairs.push([j, c])));
+  if (!pairs.length) {
+    put(box, `<div class="empty"><img src="/brand/favicon.svg" alt=""><b>No clips yet</b>Paste a link in Videos or Home to generate vertical clips.</div>`);
+    return;
+  }
+  put(box, `<div class="grid">${pairs.map(([j, c]) => clipHtml(j, c)).join("")}</div>`);
+}
+function drawPostingView() {
+  const box = $("#postingView"); if (!box) return;
+  const o = S.overview;
+  if (!o) { put(box, `<div class="set-load">Loading posting queue…</div>`); return; }
+  const pst = p => p.status === "posted" ? `<span class="pill ok">Posted</span>` : p.status === "failed" ? `<span class="pill bad">Failed</span>` : p.status === "posting" ? `<span class="pill warn">Posting now</span>` : `<span class="pill warn">${clock(p.due_at)}</span>`;
+  put(box, `<div class="card"><div class="card-head"><div><h2>Post queue</h2><p class="sub">${o.paused ? "Paused. Recording and clipping carry on; nothing is posted." : "Queued clips go out at their scheduled time across connected accounts."}</p></div>
+      <div class="row"><button class="btn" data-act="go" data-v="settings" data-tab="apps">${ic("plug")}Manage accounts</button>
+        <button class="btn ${o.paused ? "primary" : ""}" data-act="pause">${ic(o.paused ? "play" : "pause")}${o.paused ? "Resume posting" : "Pause all posting"}</button></div></div>
+    ${o.posts.length ? `<div class="scroll"><table class="stack"><tr><th>When</th><th>Clip</th><th>Creator</th><th>Account</th><th class="num">Views</th><th></th></tr>
+    ${o.posts.map(p => `<tr><td data-l="Status">${pst(p)}</td><td data-l="Clip" class="c-main">${p.url ? `<a class="lnk" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}${p.error ? `<div class="err" style="margin:2px 0 0">${esc(p.error)}</div>` : ""}</td><td data-l="Creator">${esc(p.creator_name || "None")}</td><td data-l="Account">${esc(p.account_name)}</td><td data-l="Views" class="num">${p.views ?? "–"}</td>
+      <td class="c-act" style="text-align:right">${p.status === "scheduled" ? `<button class="btn sm" data-act="pcancel" data-id="${esc(p.id)}">Cancel</button>` : p.status === "failed" ? `<button class="btn sm" data-act="pretry" data-id="${esc(p.id)}">Retry</button>` : ""}</td></tr>`).join("")}</table></div>`
+    : `<div class="empty"><img src="/brand/favicon.svg" alt=""><b>Nothing queued or posted yet</b>Open any finished clip and choose accounts to post or schedule it.</div>`}</div>`);
+}
 function render() {
   drawShell(); drawJobs(); drawStream(); drawSelBar();
   if (S.view === "overview") drawOverview();
+  if (S.view === "clips") drawClipsView();
+  if (S.view === "posting") drawPostingView();
   if ($("#clog")) drawLog();
   if (D.jid) drawClipDlg(false);
 }
@@ -2560,7 +2587,7 @@ async function fetchColabStatus() {
     colabStatus = res;
     renderColabSyncChip();
     renderColabRecoveryBanner();
-    if ($("#colabdlg") && $("#colabdlg").open) {
+    if ($("#colabdlg") && $("#colabdlg").open && !window._colabCheckpointing) {
       renderColabPanel();
     }
   } catch (err) {}
@@ -2574,7 +2601,7 @@ function renderColabSyncChip() {
     return;
   }
   chip.hidden = false;
-  chip.className = `colab-chip ${colabStatus.sync_state}`;
+  chip.className = `colab-chip ${esc(colabStatus.sync_state || "")}`;
   chip.innerHTML = `<span class="dot"></span><span>${esc(colabStatus.sync_label)}</span>`;
   chip.title = `Cloud Sync: ${colabStatus.sync_label} (Click for details)`;
   chip.onclick = () => openColabModal();
@@ -2590,9 +2617,10 @@ function renderColabRecoveryBanner() {
   const rec = colabStatus.recovery;
   const timeStr = rec.checkpoint?.created_at ? new Date(rec.checkpoint.created_at * 1000).toLocaleTimeString() : "";
   const genStr = rec.checkpoint?.generation ? `Gen ${rec.checkpoint.generation}` : "";
+  const nResumed = Number(rec.resumed_jobs || 0);
   banner.hidden = false;
   banner.className = "colab-banner";
-  banner.innerHTML = `<div><span class="badge">Checkpointed</span> <b>Recovered from Drive checkpoint</b> at ${timeStr} (${genStr}). Resuming ${rec.resumed_jobs} job${rec.resumed_jobs === 1 ? '' : 's'}.</div>
+  banner.innerHTML = `<div><span class="badge">Checkpointed</span> <b>Recovered from Drive checkpoint</b> at ${esc(timeStr)} (${esc(genStr)}). Resuming ${nResumed} job${nResumed === 1 ? '' : 's'}.</div>
     <button class="close-btn" type="button" title="Dismiss" onclick="window.colabRecoveryDismissed = true; renderColabRecoveryBanner();">✕</button>`;
 }
 
@@ -2606,24 +2634,29 @@ function openColabModal() {
 function renderColabPanel() {
   const dlg = $("#colabdlg");
   if (!dlg || !colabStatus) return;
-  const safe = colabStatus.safe_to_disconnect;
-  const safeHtml = safe
-    ? `<div class="colab-safe-badge safe">${ic("check")} Safe to disconnect. All durable data and database state are verified on Google Drive.</div>`
-    : `<div class="colab-safe-badge unsafe">${ic("bolt")} Sync in progress (${colabStatus.pending_count} items, ${Math.round(colabStatus.pending_bytes / 1024 / 1024)} MB). Do not close Colab yet.</div>`;
+  let safeHtml;
+  if (colabStatus.last_error) {
+    safeHtml = `<div class="colab-safe-badge" style="background:var(--bad-soft);color:var(--bad);border:1px solid rgba(239,68,68,.3)">${ic("warn")} Sync error: ${esc(colabStatus.last_error)}</div>`;
+  } else if (colabStatus.safe_to_disconnect) {
+    safeHtml = `<div class="colab-safe-badge safe">${ic("check")} Safe to disconnect. All durable data and database state are verified on Google Drive.</div>`;
+  } else {
+    safeHtml = `<div class="colab-safe-badge unsafe">${ic("bolt")} Sync in progress (${Number(colabStatus.pending_count || 0)} items, ${Math.round((colabStatus.pending_bytes || 0) / 1024 / 1024)} MB). Do not close Colab yet.</div>`;
+  }
 
   const rows = (colabStatus.last_checkpoints || []).map(cp => {
     const d = new Date(cp.created_at * 1000).toLocaleTimeString();
-    return `<tr><td><b>Gen ${cp.generation}</b></td><td>${d}</td><td><code>${(cp.sha256 || "").slice(0, 8)}</code></td><td><span style="color:#34D399">${ic("check")} Verified</span></td></tr>`;
+    return `<tr><td><b>Gen ${esc(String(cp.generation))}</b></td><td>${esc(d)}</td><td><code>${esc((cp.sha256 || "").slice(0, 8))}</code></td><td><span style="color:#34D399">${ic("check")} Verified</span></td></tr>`;
   }).join("");
 
+  const sessShort = colabStatus.lease?.session_id ? esc(String(colabStatus.lease.session_id).slice(0, 14)) : "Heartbeat OK";
   dlg.innerHTML = `<div class="colab-panel">
     <h2><svg viewBox="0 0 256 256" style="width:22px;height:22px;fill:var(--brand)"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H40V56H216V200ZM176,88a48,48,0,0,1-96,0,8,8,0,0,1,16,0,32,32,0,0,0,64,0,8,8,0,0,1,16,0Z"/></svg> Google Drive Cloud Sync</h2>
     ${safeHtml}
     <div class="colab-grid">
-      <div class="colab-stat"><small>Google Drive Free Space</small><b>${colabStatus.drive_free_gb} GB</b> <small style="display:inline;color:var(--faint)">(min ${colabStatus.drive_min_free_gb} GB)</small></div>
-      <div class="colab-stat"><small>Session Uptime</small><b>${Math.floor(colabStatus.uptime_sec / 60)}m ${Math.floor(colabStatus.uptime_sec % 60)}s</b></div>
-      <div class="colab-stat"><small>Pending Sync Queue</small><b>${colabStatus.pending_count} files (${Math.round(colabStatus.pending_bytes / 1024 / 1024)} MB)</b></div>
-      <div class="colab-stat"><small>Session Lease</small><b>Active (${colabStatus.lease?.session_id ? colabStatus.lease.session_id.slice(0, 14) : 'Heartbeat OK'})</b></div>
+      <div class="colab-stat"><small>Google Drive Free Space</small><b>${esc(String(colabStatus.drive_free_gb))} GB</b> <small style="display:inline;color:var(--faint)">(min ${esc(String(colabStatus.drive_min_free_gb))} GB)</small></div>
+      <div class="colab-stat"><small>Session Uptime</small><b>${Math.floor((colabStatus.uptime_sec || 0) / 60)}m ${Math.floor((colabStatus.uptime_sec || 0) % 60)}s</b></div>
+      <div class="colab-stat"><small>Pending Sync Queue</small><b>${Number(colabStatus.pending_count || 0)} files (${Math.round((colabStatus.pending_bytes || 0) / 1024 / 1024)} MB)</b></div>
+      <div class="colab-stat"><small>Session Lease</small><b>Active (${sessShort})</b></div>
     </div>
     <div class="colab-checkpoints">
       <small style="color:var(--dim);font-weight:600">Last 5 Verified Database Generations</small>
@@ -2639,14 +2672,17 @@ function renderColabPanel() {
 
 async function triggerCheckpointNow() {
   const btn = $("#btnCheckpointNow");
+  window._colabCheckpointing = true;
   if (btn) { btn.disabled = true; btn.textContent = "Checkpointing..."; }
   try {
     const res = await api("/api/colab/checkpoint", {method: "POST"});
     toast(`Verified DB Checkpoint Gen ${res.checkpoint?.generation || ''} created`, "ok");
+    window._colabCheckpointing = false;
     await fetchColabStatus();
   } catch (err) {
     toast(err.message || "Checkpoint failed", "bad");
   } finally {
+    window._colabCheckpointing = false;
     if (btn) { btn.disabled = false; btn.innerHTML = `${ic("bolt")} Checkpoint now`; }
   }
 }

@@ -76,11 +76,12 @@ def sync_models(work_models_dir: Path, durable_models_dir: Path) -> None:
             shutil.copytree(str(model_dir), str(work_models_dir / model_dir.name))
 
 
-def get_owner_password() -> str:
-    """Get owner password from env, Colab secrets, or generate a new one."""
+def get_owner_password() -> tuple[str, bool]:
+    """Get owner password from env, Colab secrets, or generate a new one.
+    Returns (password, generated_bool)."""
     pw = os.environ.get("PEAKCUT_OWNER_PASSWORD", "").strip()
     if pw:
-        return pw
+        return pw, False
 
     # Try Colab userdata secrets
     try:
@@ -88,18 +89,17 @@ def get_owner_password() -> str:
 
         pw = (userdata.get("PEAKCUT_OWNER_PASSWORD") or userdata.get("CATS_EYE_PASSWORD") or "").strip()
         if pw:
-            return pw
+            return pw, False
     except Exception:
         pass
 
     # Generate secure random password
     pw = secrets.token_hex(8)
     print("\n" + "=" * 60)
-    print(f"  [SECURITY] Generated Cat's Eye Owner Password: {pw}")
-    print("  Save this password to unlock your Colab session in the browser.")
-    print("  Or set PEAKCUT_OWNER_PASSWORD in Colab Secrets (key icon).")
+    print(f"  [SECURITY] One-time Cat's Eye Owner Password: {pw}")
+    print("  Set PEAKCUT_OWNER_PASSWORD in Colab Secrets (key icon) so it isn't printed in output.")
     print("=" * 60 + "\n", flush=True)
-    return pw
+    return pw, True
 
 
 def main() -> None:
@@ -144,7 +144,7 @@ def main() -> None:
     sync_models(work_dir / "models", durable_dir / "models")
 
     # Password
-    pw = get_owner_password()
+    pw, pw_generated = get_owner_password()
     os.environ["PEAKCUT_OWNER_PASSWORD"] = pw
 
     if args.force_lease:
@@ -158,6 +158,8 @@ def main() -> None:
     if not mgr:
         print("  Error: Could not initialize ColabManager.")
         sys.exit(1)
+
+    os.environ["PEAKCUT_COLAB_SESSION_ID"] = mgr.session_id
 
     try:
         print("  Acquiring session lease and verifying durable checkpoints...", flush=True)
@@ -177,6 +179,11 @@ def main() -> None:
     else:
         print("  >>> Clean database initialized. Ready for new jobs.")
 
+    # Hand off lease & background duties cleanly to the child studio.server process
+    mgr.db_checkpoint_mgr.stop_checkpoint_timer()
+    mgr.uploader.stop()
+    mgr.lease.stop_heartbeat()
+
     # Expose web access instructions
     print(f"\n  Starting Cat's Eye web server on http://127.0.0.1:{args.port} ...", flush=True)
 
@@ -188,7 +195,8 @@ def main() -> None:
             print("\n" + "*" * 60)
             print("  OPEN CAT'S EYE IN YOUR BROWSER:")
             print(f"  {proxy_url}")
-            print(f"  Password: {pw}")
+            pw_hint = f"{pw} (one-time generated)" if pw_generated else "<set via PEAKCUT_OWNER_PASSWORD>"
+            print(f"  Password: {pw_hint}")
             print("*" * 60 + "\n", flush=True)
         except Exception:
             print(f"  Access via Colab proxy port: http://localhost:{args.port}")
@@ -197,10 +205,11 @@ def main() -> None:
     cmd = [sys.executable, "-m", "studio.server"]
     try:
         proc = subprocess.run(cmd, cwd=str(ROOT))
+        mgr.lease.release()
         sys.exit(proc.returncode)
     except KeyboardInterrupt:
         print("\n  Stopping Cat's Eye Colab runtime...", flush=True)
-        mgr.stop()
+        mgr.lease.release()
         print("  All data safely committed to Drive. Safe to disconnect.")
 
 

@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 
-from .artifacts import ArtifactStore
+from .artifacts import ArtifactStore, _validate_segment
 
 logger = logging.getLogger("studio.pipeline.stage")
 
@@ -181,26 +181,34 @@ class StageContext:
 
     def checkpoint(self, key: str, payload: Dict[str, Any]) -> None:
         """Save intra-stage progress state both locally and to durable store."""
-        job_id = self.job.get("id", "job")
-        chk_dir = self.user_dir / "checkpoints" / job_id
+        job_id = _validate_segment(self.job.get("id", "job"), "job_id")
+        safe_stage = _validate_segment(self.stage_name or "stage", "stage")
+        safe_key = _validate_segment(key, "checkpoint key")
+        chk_dir = (self.user_dir / "checkpoints" / job_id).resolve()
         chk_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{self.stage_name}_{key}.json"
-        local_file = chk_dir / filename
+        filename = f"{safe_stage}_{safe_key}.json"
+        local_file = (chk_dir / filename).resolve()
+        if not local_file.is_relative_to(self.user_dir.resolve()):
+            raise ValueError("Checkpoint path escapes user directory")
         local_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         if self.durable_store:
             try:
-                rel_path = f"checkpoints/{job_id}/{filename}"
+                rel_path = f"users/{self.user_id}/checkpoints/{job_id}/{filename}"
                 self.durable_store.put_file(local_file, rel_path)
             except Exception as e:
                 self.logger.warning("Could not persist intra-stage checkpoint %s: %s", key, e)
 
     def resume_state(self, key: str) -> Optional[Dict[str, Any]]:
         """Retrieve intra-stage checkpoint state from local disk or durable store."""
-        job_id = self.job.get("id", "job")
-        chk_dir = self.user_dir / "checkpoints" / job_id
-        filename = f"{self.stage_name}_{key}.json"
-        local_file = chk_dir / filename
+        job_id = _validate_segment(self.job.get("id", "job"), "job_id")
+        safe_stage = _validate_segment(self.stage_name or "stage", "stage")
+        safe_key = _validate_segment(key, "checkpoint key")
+        chk_dir = (self.user_dir / "checkpoints" / job_id).resolve()
+        filename = f"{safe_stage}_{safe_key}.json"
+        local_file = (chk_dir / filename).resolve()
+        if not local_file.is_relative_to(self.user_dir.resolve()):
+            raise ValueError("Checkpoint path escapes user directory")
 
         # 1. Check local file
         if local_file.is_file():
@@ -209,16 +217,16 @@ class StageContext:
             except Exception:
                 pass
 
-        # 2. Check durable store
+        # 2. Check durable store (scoped by user_id, with legacy fallback)
         if self.durable_store:
-            rel_path = f"checkpoints/{job_id}/{filename}"
-            if self.durable_store.exists(rel_path):
-                try:
-                    local_file.parent.mkdir(parents=True, exist_ok=True)
-                    self.durable_store.get_file(rel_path, local_file)
-                    return json.loads(local_file.read_text(encoding="utf-8"))
-                except Exception as e:
-                    self.logger.warning("Could not restore intra-stage checkpoint %s: %s", key, e)
+            for rel_path in (f"users/{self.user_id}/checkpoints/{job_id}/{filename}", f"checkpoints/{job_id}/{filename}"):
+                if self.durable_store.exists(rel_path):
+                    try:
+                        local_file.parent.mkdir(parents=True, exist_ok=True)
+                        self.durable_store.get_file(rel_path, local_file)
+                        return json.loads(local_file.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        self.logger.warning("Could not restore intra-stage checkpoint %s: %s", key, e)
 
         return None
 
@@ -233,11 +241,6 @@ class Stage:
     outputs: Tuple[str, ...] = ()
     cacheable: bool = True
     progress_unit: str = "stage"  # unit of intra-stage progress (e.g. 5m chunk, batch of 64, etc.)
-    version: int = 1
-    inputs: Tuple[str, ...] = ()
-    params_schema: Any = None
-    outputs: Tuple[str, ...] = ()
-    cacheable: bool = True
 
     def get_params(self, ctx: StageContext) -> Dict[str, Any]:
         """Extract params relevant to this stage from the job options."""

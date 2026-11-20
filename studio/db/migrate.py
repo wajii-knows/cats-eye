@@ -28,7 +28,7 @@ def ensure_migrations_table(conn: sa.Connection) -> None:
                 """
                 CREATE TABLE schema_migrations (
                     name VARCHAR(255) PRIMARY KEY,
-                    applied_at REAL NOT NULL
+                    applied_at DOUBLE PRECISION NOT NULL
                 )
                 """
             )

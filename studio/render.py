@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import config, roman
+from . import config, roman, timeutil
 from .media import NO_WINDOW, run
 
 W, H = config.OUT_W, config.OUT_H
@@ -87,9 +87,7 @@ LAYOUTS = {
 
 
 def _ts(t):
-    t = max(0.0, t)
-    h, m = int(t // 3600), int(t % 3600 // 60)
-    return f"{h}:{m:02d}:{t % 60:05.2f}"
+    return timeutil.sec_to_ass(t)
 
 
 def _clean(text):
@@ -275,7 +273,9 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h):
     if cur < dur - 0.1:
         tiled.append({"start": cur, "end": dur, "type": "close" if tiled else "wide"})
 
-    clean = [s for s in tiled if s["end"] - s["start"] >= 0.3]
+    clean = [s for s in tiled if s["end"] - s["start"] >= 0.3][:6]
+    if clean:
+        clean[-1] = {**clean[-1], "end": dur}
     if not clean:
         return _filter("blur", fg_h)
 
@@ -363,7 +363,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
     dur = end - start
-    if layout == "multishot" or (shots and len(shots) > 1 and layout not in ("crop", "zoom")):
+    if layout == "multishot":
         rel_shots = []
         for s in (shots or []):
             if isinstance(s, dict):

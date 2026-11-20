@@ -58,6 +58,14 @@ async def _more_threads():
 
 @app.on_event("startup")
 def _startup():
+    if config.COLAB_MODE:
+        if not config.OWNER_PASSWORD:
+            raise RuntimeError("PEAKCUT_OWNER_PASSWORD is required when PEAKCUT_COLAB is enabled.")
+        from .storage.colab import get_colab_manager
+        colab_mgr = get_colab_manager()
+        if colab_mgr:
+            force = config.env("PEAKCUT_FORCE_LEASE", "0") == "1"
+            colab_mgr.start(force_lease=force)
     db.init()
     for f in (config.TMP_DIR / "uploads").glob("*"):      # uploads cut short by a restart
         try:
@@ -70,14 +78,6 @@ def _startup():
     if not transcribe.REMOTE and config.env("PEAKCUT_FETCH_MODEL", "1") != "0":     # the speech model: fetched now, in the background, if it was never downloaded
         from . import fetch_model
         threading.Thread(target=lambda: _quiet(fetch_model.ensure), daemon=True).start()
-    if config.COLAB_MODE:
-        if not config.OWNER_PASSWORD:
-            raise RuntimeError("PEAKCUT_OWNER_PASSWORD is required when PEAKCUT_COLAB is enabled.")
-        from .storage.colab import get_colab_manager
-        colab_mgr = get_colab_manager()
-        if colab_mgr:
-            force = config.env("PEAKCUT_FORCE_LEASE", "0") == "1"
-            colab_mgr.start(force_lease=force)
     jobs.start()
     live.start()
     posting.start()
@@ -140,6 +140,10 @@ class Gate:
             user = auth._sess.get(auth._h(cookie)) if cookie and not admin_area else None
             user = user[1] if user and time.time() - user[0] < auth.SESS_FOR else (
                 await run_in_threadpool(auth.user_for, cookie, admin_area) if cookie else None)
+            if path in ("/signup", "/reset") or path.startswith("/auth/"):
+                return await deny(303, "", redirect="/app" if user else "/login")
+            if path.startswith("/api/auth/") and path not in ("/api/auth/me", "/api/auth/login", "/api/auth/logout"):
+                return await deny(404, "Not Found")
         else:
             # No sign-in: whoever opens the page is the owner. Because nothing else stands in the way, the page
             # must have been asked for by its real address (a number, "localhost", or the address in settings),
@@ -525,12 +529,23 @@ def colab_checkpoint(request: Request):
 def _signed_in(request: Request, user, first: bool, redirect=None):
     token = auth.start_session(user.id, _ip(request), request.headers.get("user-agent", ""))
     resp = RedirectResponse(redirect, 303) if redirect else JSONResponse({"user": auth.public(user)})
-    resp.set_cookie(**auth.cookie_args(token))
+    host = request.headers.get("host", "").strip().lower()
+    is_https = (
+        config.HTTPS
+        or request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower() == "https"
+        or request.headers.get("origin", "").startswith("https://")
+        or request.headers.get("referer", "").startswith("https://")
+        or (config.COLAB_MODE and bool(host) and not host.startswith(("127.0.0.1", "localhost", "[::1]")))
+    )
+    resp.set_cookie(**auth.cookie_args(token, https=is_https))
     return resp
 
 
 @app.post("/api/auth/signup")
 def signup(request: Request, body: dict = Body(...)):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     try:
         auth.throttle("signup:" + _ip(request), 8, 3600)
         user, first = auth.signup(str(body.get("email", "")), str(body.get("password", "")), str(body.get("name", "")))
@@ -543,6 +558,8 @@ def signup(request: Request, body: dict = Body(...)):
 
 @app.post("/api/auth/resend-verification")
 def resend_verification(request: Request):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     u = _me(request)
     if not u:
         raise HTTPException(401, "Please sign in.")
@@ -558,6 +575,8 @@ def resend_verification(request: Request):
 
 @app.get("/auth/verify")
 def verify_email(request: Request, t: str = ""):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     try:
         auth.verify_link(t)
     except auth.AuthError as e:
@@ -567,6 +586,8 @@ def verify_email(request: Request, t: str = ""):
 
 @app.post("/api/auth/forgot")
 def forgot_password(request: Request, body: dict = Body(...)):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     email = str(body.get("email", "")).strip().lower()
     try:
         auth.throttle("forgot-ip:" + _ip(request), 10, 3600)
@@ -579,6 +600,8 @@ def forgot_password(request: Request, body: dict = Body(...)):
 
 @app.post("/api/auth/reset")
 def reset_password(request: Request, body: dict = Body(...)):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     try:
         auth.throttle("reset-ip:" + _ip(request), 20, 3600)
         user = auth.reset_password(str(body.get("token", "")), str(body.get("password", "")))
@@ -617,6 +640,8 @@ def me(request: Request):
 
 @app.post("/api/auth/password")
 def change_password(request: Request, body: dict = Body(...)):
+    if config.COLAB_MODE or not config.ACCOUNTS:
+        raise HTTPException(404, "Not Found")
     if not _me(request):
         raise HTTPException(401, "Please sign in.")
     try:

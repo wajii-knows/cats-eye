@@ -334,16 +334,12 @@ body {
 }
 
 .ce-card-interactive {
-  transition: transform var(--ce-duration-fast) var(--ce-ease-out),
-              border-color var(--ce-duration-fast) var(--ce-ease-out),
-              box-shadow var(--ce-duration-fast) var(--ce-ease-out);
+  transition: border-color var(--ce-duration-fast) var(--ce-ease-out);
   cursor: pointer;
 }
 
 .ce-card-interactive:hover {
-  transform: translateY(-2px);
   border-color: var(--ce-brand-border);
-  box-shadow: var(--ce-shadow-md);
 }
 
 /* Stat Tile */

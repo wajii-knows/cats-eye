@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -33,6 +34,15 @@ import sqlalchemy as sa
 from studio import config, ctx, db
 
 logger = logging.getLogger("studio.artifacts")
+
+_SEG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def _validate_segment(value: str, label: str) -> str:
+    s = str(value or "").strip()
+    if not _SEG_RE.fullmatch(s) or ".." in s or s in (".", ".."):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return s
 
 
 def _sha256_file(path: Path) -> str:
@@ -60,34 +70,45 @@ class ArtifactStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _dest_dir(self, stage: str, fingerprint: str) -> Path:
-        return self.root / stage / fingerprint[:2] / fingerprint
+        stg = _validate_segment(stage, "stage")
+        fp = _validate_segment(fingerprint, "fingerprint")
+        if len(fp) < 2:
+            raise ValueError(f"Invalid fingerprint length: {fingerprint!r}")
+        dest = (self.root / stg / fp[:2] / fp).resolve()
+        if not dest.is_relative_to(self.root.resolve()):
+            raise ValueError("Artifact path escapes store root")
+        return dest
 
     def _find_dest_dir(self, fingerprint: str, stage: Optional[str] = None) -> Optional[Path]:
+        fp = _validate_segment(fingerprint, "fingerprint")
+        if len(fp) < 2:
+            raise ValueError(f"Invalid fingerprint length: {fingerprint!r}")
+        root_res = self.root.resolve()
         if stage:
-            dest = self._dest_dir(stage, fingerprint)
+            dest = self._dest_dir(stage, fp)
             if dest.is_dir() and (dest / "manifest.json").is_file():
                 return dest
             return None
-        # If stage not specified, check DB first
+        # If stage not specified, check DB first scoped strictly to self.user_id
         try:
             with db.engine.connect() as conn:
                 r = conn.execute(
                     sa.select(db.artifacts.c.path, db.artifacts.c.stage).where(
-                        db.artifacts.c.fingerprint == fingerprint
+                        sa.and_(db.artifacts.c.fingerprint == fp, db.artifacts.c.user_id == self.user_id)
                     )
                 ).first()
                 if r:
-                    p = Path(r[0])
-                    if p.is_dir() and (p / "manifest.json").is_file():
+                    p = Path(r[0]).resolve()
+                    if p.is_relative_to(root_res) and p.is_dir() and (p / "manifest.json").is_file():
                         return p
         except Exception:
             pass
-        # Search stage folders under root
+        # Search stage folders under this user's artifact root
         if self.root.is_dir():
             for stage_dir in self.root.iterdir():
                 if stage_dir.is_dir():
-                    cand = stage_dir / fingerprint[:2] / fingerprint
-                    if cand.is_dir() and (cand / "manifest.json").is_file():
+                    cand = (stage_dir / fp[:2] / fp).resolve()
+                    if cand.is_relative_to(root_res) and cand.is_dir() and (cand / "manifest.json").is_file():
                         return cand
         return None
 
@@ -121,17 +142,19 @@ class ArtifactStore:
 
         If the destination already exists, it is reused and the existing manifest is returned.
         """
+        stg = _validate_segment(stage, "stage")
+        fp = _validate_segment(fingerprint, "fingerprint")
         metadata = metadata or {}
-        parent = self.root / stage / fingerprint[:2]
-        dest = parent / fingerprint
+        dest = self._dest_dir(stg, fp)
+        parent = dest.parent
         parent.mkdir(parents=True, exist_ok=True)
 
         if dest.is_dir() and (dest / "manifest.json").is_file():
             # Destination already exists: reuse it
-            return self.get(fingerprint, stage=stage) or {}
+            return self.get(fp, stage=stg) or {}
 
         # Atomic temp directory
-        tmp_dir = parent / f".tmp_{fingerprint}_{os.getpid()}_{int(time.time() * 1000)}"
+        tmp_dir = (parent / f".tmp_{fp}_{os.getpid()}_{int(time.time() * 1000)}").resolve()
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -139,9 +162,12 @@ class ArtifactStore:
             total_bytes = 0
 
             for out_name, src in files.items():
+                safe_name = _validate_segment(out_name, "artifact output name")
                 src_path = Path(src)
-                target_path = tmp_dir / out_name
-                if src_path.resolve() != target_path.resolve():
+                target_path = (tmp_dir / safe_name).resolve()
+                if not target_path.is_relative_to(tmp_dir):
+                    raise ValueError(f"Output path escapes artifact dir: {out_name!r}")
+                if src_path.resolve() != target_path:
                     shutil.copy2(str(src_path), str(target_path))
                 # Flush and fsync
                 with target_path.open("rb") as f:
@@ -150,7 +176,7 @@ class ArtifactStore:
                     except OSError:
                         pass
                 file_hash = _sha256_file(target_path)
-                sha256_map[out_name] = file_hash
+                sha256_map[safe_name] = file_hash
                 total_bytes += target_path.stat().st_size
 
             now = time.time()
@@ -179,16 +205,18 @@ class ArtifactStore:
             # Atomic rename into place
             os.replace(str(tmp_dir), str(dest))
 
-            # Record in DB artifacts table
+            # Record in DB artifacts table scoped to self.user_id
             try:
                 with db.engine.begin() as conn:
                     conn.execute(
-                        db.artifacts.delete().where(db.artifacts.c.fingerprint == fingerprint)
+                        db.artifacts.delete().where(
+                            sa.and_(db.artifacts.c.fingerprint == fp, db.artifacts.c.user_id == self.user_id)
+                        )
                     )
                     conn.execute(
                         db.artifacts.insert().values(
-                            fingerprint=fingerprint,
-                            stage=stage,
+                            fingerprint=fp,
+                            stage=stg,
                             version=version,
                             user_id=self.user_id,
                             path=str(dest),
@@ -226,7 +254,7 @@ class ArtifactStore:
             with db.engine.begin() as conn:
                 conn.execute(
                     db.artifacts.update()
-                    .where(db.artifacts.c.fingerprint == fingerprint)
+                    .where(sa.and_(db.artifacts.c.fingerprint == fingerprint, db.artifacts.c.user_id == self.user_id))
                     .values(accessed_at=now)
                 )
         except Exception:
@@ -241,7 +269,9 @@ class ArtifactStore:
         try:
             with db.engine.begin() as conn:
                 conn.execute(
-                    db.artifacts.delete().where(db.artifacts.c.fingerprint == fingerprint)
+                    db.artifacts.delete().where(
+                        sa.and_(db.artifacts.c.fingerprint == fingerprint, db.artifacts.c.user_id == self.user_id)
+                    )
                 )
         except Exception:
             pass

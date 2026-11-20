@@ -334,7 +334,7 @@ stateDiagram-v2
 ### 8.1 Automated Test Suites
 Run existing test runner:
 ```bash
-cd D:\peakcut
+cd <repo-root>
 python tests/run.py
 ```
 **Verification Requirement:** All 16 existing test suites must pass with zero failures:

@@ -60,7 +60,7 @@ class SessionLease:
         now = time.time()
 
         if existing and not force:
-            last_hb = float(existing.get("heartbeat_at", 0.0))
+            last_hb = float(existing.get("heartbeat_at") or existing.get("last_heartbeat") or 0.0)
             elapsed = now - last_hb
             other_id = existing.get("session_id", "unknown")
             if other_id != self.session_id and elapsed < LEASE_TIMEOUT_SEC:
@@ -74,6 +74,7 @@ class SessionLease:
             "session_id": self.session_id,
             "started_at": existing.get("started_at", now) if (existing and existing.get("session_id") == self.session_id) else now,
             "heartbeat_at": now,
+            "last_heartbeat": now,
             "hostname": socket.gethostname(),
             "pid": os.getpid(),
         }
@@ -98,9 +99,12 @@ class SessionLease:
         def _beat_loop():
             while not self._stop_heartbeat.wait(self.heartbeat_interval):
                 try:
-                    now = time.time()
                     existing = self.read_lease() or {}
-                    existing.update(heartbeat_at=now, session_id=self.session_id, hostname=socket.gethostname())
+                    if existing.get("session_id") and existing.get("session_id") != self.session_id:
+                        self._stop_heartbeat.set()
+                        break
+                    now = time.time()
+                    existing.update(heartbeat_at=now, last_heartbeat=now, session_id=self.session_id, hostname=socket.gethostname())
                     tmp = self.durable_dir / f"{LEASE_FILENAME}.tmp.{self.session_id}"
                     tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
                     with tmp.open("rb") as f:
