@@ -555,6 +555,35 @@ img.av{object-fit:cover}
 .danger-card h2{color:var(--bad)}
 .clip-foot{display:flex;gap:4px;align-items:center;margin-top:auto;padding-top:8px}
 
+/* ---------- visual understanding (PEAKCUT_SNAPSHOTS) */
+.ce-vis-card{background:var(--frame-2);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-bottom:16px}
+.ce-vis-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.ce-vis-badges{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ce-vis-loader{display:flex;flex-direction:column;align-items:center;gap:12px;padding:34px 20px;text-align:center}
+.ce-vis-loader img{width:48px;height:48px}
+.ce-vis-strip{background:var(--frame-2);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:16px}
+.ce-vis-viewport{position:relative;overflow-x:auto;overflow-y:hidden;height:186px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--frame);scrollbar-gutter:stable}
+.ce-vis-track{position:relative;height:100%}
+.ce-vis-ruler{position:relative;height:28px;border-bottom:1px solid var(--line);background:var(--muted)}
+.ce-vis-tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--line-2);padding:4px 0 0 5px;font-size:10px;color:var(--dim);pointer-events:none;white-space:nowrap}
+.ce-scene-mark{position:absolute;top:2px;height:22px;border-left:2px solid var(--brand);padding:2px 6px;font-size:10px;font-weight:600;color:var(--brand);background:var(--brand-soft);border-radius:0 4px 4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.ce-vis-items{position:relative;height:156px}
+.ce-snap-card{position:absolute;top:8px;width:142px;height:138px;padding:6px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--frame-2);display:flex;flex-direction:column;gap:5px;cursor:pointer;text-align:left;transition:background-color .15s ease,border-color .15s ease}
+.ce-snap-card:hover{border-color:var(--line-2);background:var(--muted)}
+.ce-snap-card.active{border-color:var(--brand);background:var(--brand-soft)}
+.ce-snap-card img{width:100%;height:78px;object-fit:cover;border-radius:4px;background:var(--frame)}
+.ce-snap-meta{display:flex;align-items:center;justify-content:space-between;gap:4px;font-size:11px;color:var(--dim);min-width:0}
+.ce-snap-sub{font-size:10px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ce-vis-insp{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start;background:var(--frame-2);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:16px}
+.ce-vis-insp img{width:100%;aspect-ratio:16/9;object-fit:contain;background:var(--frame);border-radius:var(--r-sm);border:1px solid var(--line)}
+@media (max-width:720px){.ce-vis-insp{grid-template-columns:1fr}}
+.ce-moments-list{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto}
+.ce-moment-row{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--frame-2);cursor:pointer;text-align:left;transition:background-color .15s ease,border-color .15s ease}
+.ce-moment-row:hover{background:var(--muted);border-color:var(--line-2)}
+.ce-moment-row.active{background:var(--brand-soft);border-color:var(--brand)}
+.ce-moment-time{flex:none;font-size:12px;font-weight:600;color:var(--brand);min-width:96px}
+.ce-moment-txt{flex:1;min-width:0;font-size:13px;color:var(--text)}
+
 /* ---------- live */
 .livecard{background:var(--frame-2);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);padding:20px;margin-bottom:28px}
 .lc-head{display:flex;gap:16px;align-items:flex-start;justify-content:space-between}
@@ -1337,6 +1366,12 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
   if (S.view === "live") sub = "Monitor and record live streams as they happen.";
   if (S.view === "posting") sub = "Scheduled and published posts across connected accounts.";
   if (S.view === "settings") sub = (S.status.accounts === false ? "Your AI key and connected apps." : "Your profile, security and connected apps.");
+  if (S.view.startsWith("v:")) {
+    const vj = jobOf(S.view.slice(2));
+    title = vj?.title || vj?.source?.name || "Video visuals";
+    sub = "Scene boundaries, keyframes, layout classification & transcript moments.";
+    act = `<button class="btn" data-act="go" data-v="library">Back to videos</button>`;
+  }
   let pic = "", subHtml = null, tabs = "";
   if (c) {
     title = c.name;
@@ -1373,10 +1408,13 @@ function drawShell() {  const nav = (v, icon, label, extra = "") => `<button cla
 const ROUTES = {overview: "", library: "videos", clips: "clips", live: "live", posting: "posting", settings: "settings", usage: "usage"};
 function pathFor(v, tab) {
   if (v.startsWith("c:")) return `/app/creators/${encodeURIComponent(v.slice(2))}${tab && tab !== "clips" ? "/" + tab : ""}`;
+  if (v.startsWith("v:")) return `/app/videos/${encodeURIComponent(v.slice(2))}`;
   if (v === "settings") return "/app/settings" + (tab ? "/" + tab : "");
   return "/app" + (ROUTES[v] ? "/" + ROUTES[v] : "");
 }
 function fromPath(path) {
+  const vm = path.match(/^\/app\/videos\/([^/]+)\/?$/);
+  if (vm) return ["v:" + decodeURIComponent(vm[1]), "clips"];
   const m = path.match(/^\/app\/creators\/([^/]+)(?:\/(setup|activity|clips))?\/?$/);
   if (m) return ["c:" + decodeURIComponent(m[1]), m[2] || "clips"];
   const st = path.match(/^\/app\/settings(?:\/(ai|profile|security|apps|storage))?\/?$/);
@@ -1411,6 +1449,7 @@ function go(v, tab, fromHistory) {
   else if (v === "posting") view.innerHTML = `<div id="postingView"></div>`;
   else if (v === "settings") view.innerHTML = `<div id="sform"></div>`;
   else if (v === "usage") { view.innerHTML = `<div id="usage"></div>`; loadUsage(); }
+  else if (v.startsWith("v:")) { view.innerHTML = `<div id="videoDetail"></div>`; openVideoDetail(v.slice(2)); }
   else view.innerHTML = `<div id="stream"></div><div id="cbody"></div>`;   // the live player stays put across tabs: no restart, no rebuffer
   if ($("#add")) drawAdd(v === "overview" ? "hero" : "compact");
   if (v === "overview" && window.GradientASCII) { try { window._gaStop = GradientASCII($("#appAscii"), {colors: ["#F59E0B", "#D97706", "#FDE68A", "#78350F", "#13151D"], shape: "horizon", lightMode: false, cellSize: 16, density: 0.8, glyphOpacity: 0.26, gradientOpacity: 0.32, glow: 0.06, grain: 0.06, mouseInteraction: false, clickEffect: "none"}); } catch {} }
@@ -1822,7 +1861,7 @@ function jobHtml(j) {
                 j.took ? "made in " + fmt(j.took) : "", j.kind === "live" ? "recording, " + j.stage.toLowerCase() : ""].filter(Boolean).map(esc).join(" · ");
   const pic = j.thumb ? `<img src="/media/${esc(j.id)}/thumb.jpg" alt="" loading="lazy">` : ic(j.source?.type === "file" ? "film" : "link");
   return `<div class="job-head"><div class="jt"><span class="jthumb">${pic}${j.duration ? `<span class="du">${fmt(j.duration)}</span>` : ""}</span><div style="min-width:0"><h3>${esc(j.title || j.source.name)}</h3><p class="sub">${meta}</p></div></div>
-      <div class="row" style="flex-wrap:nowrap;gap:4px">${busy ? "" : `
+      <div class="row" style="flex-wrap:nowrap;gap:4px">${S.status.snapshots_enabled ? `<button class="btn sm" data-act="openvideo" data-j="${esc(j.id)}" title="Visual timeline & scenes">Visuals</button>` : ""}${busy ? "" : `
         ${j.clips.some(c => c.status === "done") ? `<button class="btn sm icon ghost" data-act="dlall" data-j="${j.id}" title="Download all clips of this video" aria-label="Download all clips of this video">${ic("down")}</button>` : ""}
         <button class="btn sm icon ghost" data-act="deljob" data-j="${j.id}" title="Delete" aria-label="Delete this video and its clips">${ic("trash")}</button>
         <label class="selck" title="Select this video and its clips"><input type="checkbox" data-sel="j:${j.id}" ${sel().has("j:" + j.id) ? "checked" : ""} aria-label="Select this video"></label>`}</div></div>
@@ -2285,6 +2324,7 @@ function render() {
   if (S.view === "overview") drawOverview();
   if (S.view === "clips") drawClipsView();
   if (S.view === "posting") drawPostingView();
+  if (S.view.startsWith("v:")) drawVideoDetail();
   if ($("#clog")) drawLog();
   if (D.jid) drawClipDlg(false);
 }
@@ -2322,7 +2362,7 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", () => { if (!document.hidden) tick(); });
 function loop() {
-  const active = S.jobs.some(j => ["queued", "running", "live"].includes(j.status) || j.clips.some(c => c.status === "queued" || c.status === "rendering"));
+  const active = S.jobs.some(j => ["queued", "running", "live"].includes(j.status) || j.visuals?.status === "analyzing" || j.clips.some(c => c.status === "queued" || c.status === "rendering"));
   // quick while something is being made, relaxed otherwise, and slow when the tab is in the background
   const waiting = S.creators.some(c => (c.channels && Object.keys(c.channels).length && !c.profile?.pic) || c.live_job && !jobOf(c.live_job));
   setTimeout(async () => { await tick(); loop(); }, document.hidden ? 20000 : waiting ? 1000 : active ? 2000 : 4000);
@@ -2478,6 +2518,15 @@ document.addEventListener("click", async e => {
       if (!await ask("Delete this video?", "The video and all of its clips are permanently deleted. This cannot be undone.", "Delete", true)) return;
       await api(`/api/jobs/${d.j}`, {method:"DELETE"}); toast("Deleted"); return tick();
     }
+    if (a === "openvideo") return go("v:" + d.j);
+    if (a === "analyzevis") {
+      b.disabled = true;
+      await send(`/api/videos/${d.j}/analyze`, {force: !!d.force});
+      toast("Started visual analysis…", "ok");
+      await tick();
+      if (S.view === "v:" + d.j) openVideoDetail(d.j);
+      return;
+    }
     if (a === "chadd") {
       const k = d.p, v = $("#chan_" + k)?.value.trim();
       if (!v) { $("#chan_" + k)?.focus(); return toast(`Paste their ${PLAT[k].name} channel link.`, "bad"); }
@@ -2572,6 +2621,311 @@ document.addEventListener("click", async e => {
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }
 });
+
+/* ============================================================ video detail & virtualized snapshot strip */
+const V = {jid: null, loaded: false, lastStatus: "", loadingMore: false, scenes: [], snapshots: [], moments: [], nextSnapCursor: null, nextMomentCursor: null, totalSnaps: 0, totalMoments: 0, activeSnapId: null, activeMomentIdx: -1, raf: 0, captionsStatus: "", captionsMsg: "", facecamBox: null};
+const SNAP_W = 150;
+
+function vsMomentIdxAt(t) {
+  const arr = V.moments;
+  let lo = 0, hi = arr.length - 1, hit = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid].start <= t) { hit = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return hit >= 0 && t < arr[hit].end ? hit : -1;
+}
+
+function vsSnapIdxNearest(t) {
+  const arr = V.snapshots;
+  if (!arr.length) return -1;
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid].timestamp < t) lo = mid + 1; else hi = mid;
+  }
+  if (lo === 0) return 0;
+  if (lo >= arr.length) return arr.length - 1;
+  return (t - arr[lo - 1].timestamp <= arr[lo].timestamp - t) ? lo - 1 : lo;
+}
+
+async function openVideoDetail(jid) {
+  if (V.jid !== jid) {
+    Object.assign(V, {jid, loaded: false, lastStatus: "", loadingMore: false, scenes: [], snapshots: [], moments: [], nextSnapCursor: null, nextMomentCursor: null, totalSnaps: 0, totalMoments: 0, activeSnapId: null, activeMomentIdx: -1, captionsStatus: "", captionsMsg: "", facecamBox: null});
+  }
+  drawVideoDetail();
+  const j = jobOf(jid);
+  const vis = j?.visuals || {};
+  if (vis.status !== "done") return;
+  if (V.loaded && V.lastStatus === "done") return;
+  try {
+    const [scRes, snRes, moRes] = await Promise.all([
+      api(`/api/videos/${encodeURIComponent(jid)}/scenes?limit=500`),
+      api(`/api/videos/${encodeURIComponent(jid)}/snapshots?limit=200`),
+      api(`/api/videos/${encodeURIComponent(jid)}/moments?limit=250`),
+    ]);
+    V.scenes = scRes.items || [];
+    V.facecamBox = scRes.facecam_box || vis.facecam_box || null;
+    V.snapshots = snRes.items || [];
+    V.totalSnaps = snRes.total || V.snapshots.length;
+    V.nextSnapCursor = snRes.next_cursor || null;
+    V.captionsStatus = snRes.captions_status || vis.captions_status || "";
+    V.captionsMsg = snRes.captions_message || vis.captions_message || "";
+    V.moments = moRes.items || [];
+    V.totalMoments = moRes.total || V.moments.length;
+    V.nextMomentCursor = moRes.next_cursor || null;
+    V.loaded = true;
+    V.lastStatus = "done";
+    if (!V.activeSnapId && V.snapshots.length) V.activeSnapId = V.snapshots[0].id;
+    drawVideoDetail(true);
+  } catch (err) {
+    toast(err.message || "Could not load visual timeline", "bad");
+  }
+}
+
+async function loadMoreSnapshots() {
+  if (!V.nextSnapCursor || V.loadingMore) return;
+  V.loadingMore = true;
+  try {
+    const snRes = await api(`/api/videos/${encodeURIComponent(V.jid)}/snapshots?limit=200&cursor=${encodeURIComponent(V.nextSnapCursor)}`);
+    V.snapshots = V.snapshots.concat(snRes.items || []);
+    V.nextSnapCursor = snRes.next_cursor || null;
+    V.totalSnaps = snRes.total || V.snapshots.length;
+    scheduleVirtualStrip();
+  } catch {} finally {
+    V.loadingMore = false;
+  }
+}
+
+async function loadMoreMoments() {
+  if (!V.nextMomentCursor) return;
+  try {
+    const moRes = await api(`/api/videos/${encodeURIComponent(V.jid)}/moments?limit=250&cursor=${encodeURIComponent(V.nextMomentCursor)}`);
+    V.moments = V.moments.concat(moRes.items || []);
+    V.nextMomentCursor = moRes.next_cursor || null;
+    drawMomentsPanel();
+  } catch {}
+}
+
+function scheduleVirtualStrip() {
+  if (V.raf) return;
+  V.raf = requestAnimationFrame(() => { V.raf = 0; renderVirtualStrip(); });
+}
+
+function renderVirtualStrip() {
+  const vp = $("#vsStripViewport"), itemsEl = $("#vsItems"), track = $("#vsTrack");
+  if (!vp || !itemsEl || !track) return;
+  const totalCount = Math.max(V.totalSnaps, V.snapshots.length);
+  const trackW = Math.max(vp.clientWidth || 600, totalCount * SNAP_W);
+  track.style.width = trackW + "px";
+
+  const sl = vp.scrollLeft, cw = vp.clientWidth || 900;
+  const lo = Math.max(0, Math.floor(sl / SNAP_W) - 6);
+  const hi = Math.min(V.snapshots.length - 1, Math.ceil((sl + cw) / SNAP_W) + 6);
+  if (hi >= V.snapshots.length - 24 && V.nextSnapCursor) loadMoreSnapshots();
+
+  let html = "";
+  for (let i = lo; i <= hi; i++) {
+    const sn = V.snapshots[i];
+    if (!sn) continue;
+    const isAct = sn.id === V.activeSnapId;
+    const facesTxt = sn.faces == null ? "" : `${sn.faces} face${sn.faces === 1 ? "" : "s"}`;
+    const bTxt = sn.is_scene_boundary ? `<span class="pill sm warn" title="Scene boundary">Cut</span>` : "";
+    html += `<button type="button" class="ce-snap-card ${isAct ? "active" : ""}" style="left:${i * SNAP_W + 6}px" data-sidx="${i}" data-sid="${esc(sn.id)}">
+      <img src="${esc(sn.thumb_url)}" alt="Frame ${fmt(sn.timestamp)}" loading="lazy">
+      <div class="ce-snap-meta"><b>${fmt(sn.timestamp)}</b>${bTxt}</div>
+      <div class="ce-snap-sub">${esc(facesTxt || (sn.blur != null ? `blur ${Math.round(sn.blur)}` : "frame"))}</div>
+    </button>`;
+  }
+  itemsEl.innerHTML = html;
+}
+
+function drawInspector(sn) {
+  const box = $("#vsInspector"); if (!box) return;
+  if (!sn) { put(box, ""); return; }
+  const sc = V.scenes.find(x => x.id === sn.scene_id);
+  const cap = sn.caption || {};
+  const labels = Array.isArray(cap.labels) ? cap.labels.map(x => `<span class="pill sm">${esc(x)}</span>`).join(" ") : "";
+  put(box, `<div class="ce-vis-insp"><img src="${esc(sn.analysis_url)}" alt="Snapshot at ${fmt(sn.timestamp)}">
+    <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <b>${fmt(sn.timestamp)}</b>
+        ${sc?.layout ? `<span class="pill ok">${esc(sc.layout)}</span>` : ""}
+        ${sn.faces != null ? `<span class="pill">${sn.faces} face${sn.faces === 1 ? "" : "s"}</span>` : `<span class="pill">Faces: n/a</span>`}
+        ${sn.motion != null ? `<span class="pill">Motion ${Number(sn.motion).toFixed(2)}</span>` : ""}
+        <a class="btn sm ghost" href="${esc(sn.full_url)}" target="_blank" rel="noopener">Full frame</a>
+      </div>
+      ${cap.caption ? `<p style="margin:0;font-weight:600">${esc(cap.caption)}</p>` : `<p class="sub" style="margin:0">Local visual metrics: brightness ${sn.brightness ?? "–"}, Laplacian blur ${sn.blur ?? "–"}, edge density ${sn.edge_density ?? "–"}</p>`}
+      ${labels ? `<div class="row" style="gap:4px;flex-wrap:wrap">${labels}</div>` : ""}
+      ${cap.text_on_screen ? `<div class="sub"><b>On screen:</b> ${esc(cap.text_on_screen)}</div>` : ""}
+    </div></div>`);
+}
+
+function drawMomentsPanel() {
+  const box = $("#vsMoments"); if (!box) return;
+  if (!V.moments.length) {
+    put(box, `<p class="sub">No timeline segments available.</p>`);
+    return;
+  }
+  const rows = V.moments.map((m, idx) => {
+    const isAct = idx === V.activeMomentIdx;
+    const sc = V.scenes.find(x => m.scene_ids?.includes(x.id));
+    return `<button type="button" class="ce-moment-row ${isAct ? "active" : ""}" data-midx="${idx}">
+      <div class="ce-moment-time">${fmt(m.start)} – ${fmt(m.end)}</div>
+      <div class="ce-moment-txt">${m.text ? esc(m.text) : '<span class="sub">(no speech)</span>'}</div>
+      <div class="row" style="gap:6px;flex:none">
+        ${sc?.layout ? `<span class="pill sm">${esc(sc.layout)}</span>` : ""}
+        <span class="pill sm">${(m.snapshot_ids || []).length} snap${(m.snapshot_ids || []).length === 1 ? "" : "s"}</span>
+      </div>
+    </button>`;
+  }).join("");
+  const moreBtn = V.nextMomentCursor ? `<button type="button" class="btn sm" id="btnMoreMoments" style="align-self:flex-start;margin-top:6px">Load more segments</button>` : "";
+  put(box, `<div class="ce-moments-list">${rows}</div>${moreBtn}`);
+  const mb = $("#btnMoreMoments");
+  if (mb) mb.onclick = () => loadMoreMoments();
+}
+
+function syncFromSnap(snapIdx, scrollMoment = false) {
+  const sn = V.snapshots[snapIdx]; if (!sn) return;
+  V.activeSnapId = sn.id;
+  V.activeMomentIdx = vsMomentIdxAt(sn.timestamp);
+  $$("#vsItems .ce-snap-card").forEach(el => el.classList.toggle("active", el.dataset.sid === sn.id));
+  $$("#vsMoments .ce-moment-row").forEach(el => el.classList.toggle("active", Number(el.dataset.midx) === V.activeMomentIdx));
+  if (scrollMoment && V.activeMomentIdx >= 0) {
+    const row = $(`#vsMoments .ce-moment-row[data-midx="${V.activeMomentIdx}"]`);
+    row?.scrollIntoView({block: "nearest", behavior: "smooth"});
+  }
+  drawInspector(sn);
+}
+
+function syncFromMoment(mIdx, scrollStrip = false) {
+  const m = V.moments[mIdx]; if (!m) return;
+  V.activeMomentIdx = mIdx;
+  let sIdx = -1;
+  if (m.snapshot_ids?.length) sIdx = V.snapshots.findIndex(s => s.id === m.snapshot_ids[0]);
+  if (sIdx < 0) sIdx = vsSnapIdxNearest(0.5 * (m.start + m.end));
+  if (sIdx >= 0) V.activeSnapId = V.snapshots[sIdx].id;
+  $$("#vsMoments .ce-moment-row").forEach(el => el.classList.toggle("active", Number(el.dataset.midx) === mIdx));
+  if (sIdx >= 0 && scrollStrip) {
+    const vp = $("#vsStripViewport");
+    if (vp) {
+      const targetX = Math.max(0, sIdx * SNAP_W - Math.floor((vp.clientWidth || 600) / 2) + 75);
+      vp.scrollTo({left: targetX, behavior: "smooth"});
+    }
+  }
+  scheduleVirtualStrip();
+  if (sIdx >= 0) drawInspector(V.snapshots[sIdx]);
+}
+
+function drawVideoDetail(forceRebuild = false) {
+  const box = $("#videoDetail"); if (!box || !S.view.startsWith("v:")) return;
+  const jid = S.view.slice(2), j = jobOf(jid);
+  if (!j) { put(box, `<div class="empty"><b>Video not found</b></div>`); return; }
+  const vis = j.visuals || {};
+  const st = vis.status || "idle";
+
+  if (st !== "done" && V.lastStatus === "done") V.loaded = false;
+  V.lastStatus = st;
+
+  if (st === "idle") {
+    box.dataset.ready = "0";
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div><h2>Visual understanding</h2><p class="sub">Detect scene boundaries, extract keyframes, classify layouts, and link frames to transcript moments.</p></div>
+      <button class="btn primary" data-act="analyzevis" data-j="${esc(jid)}">${ic("bolt")}Analyze visuals</button></div></div>`);
+    return;
+  }
+  if (st === "analyzing") {
+    box.dataset.ready = "0";
+    const pct = Math.round((vis.progress || 0) * 100);
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Analyzing visuals">
+      <h3>${esc(vis.stage || "Analyzing visuals…")}</h3>
+      <div class="bar" style="width:100%;max-width:360px"><i style="width:${pct}%"></i></div>
+      <p class="sub">${pct}% complete</p></div></div>`);
+    return;
+  }
+  if (st === "failed") {
+    box.dataset.ready = "0";
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div><h2>Visual analysis failed</h2><div class="err">${esc(vis.error || "Unknown error")}</div></div>
+      <button class="btn primary" data-act="analyzevis" data-j="${esc(jid)}" data-force="1">Retry analysis</button></div></div>`);
+    return;
+  }
+  if (!V.loaded) {
+    box.dataset.ready = "0";
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Loading visuals"><p class="sub">Loading visual timeline…</p></div></div>`);
+    openVideoDetail(jid);
+    return;
+  }
+  if (!forceRebuild && box.dataset.ready === "1") return;
+  box.dataset.ready = "1";
+
+  const capBadge = V.captionsStatus === "not_available"
+    ? `<span class="pill" title="${esc(V.captionsMsg)}">Captions: not available</span>`
+    : V.captionsStatus === "partial"
+    ? `<span class="pill warn" title="${esc(V.captionsMsg)}">${esc(V.captionsMsg || "Captions partial")}</span>`
+    : `<span class="pill ok">Captions ready</span>`;
+  const fcBadge = V.facecamBox ? `<span class="pill ok">Facecam box detected</span>` : "";
+
+  const dur = Math.max(1, Number(j.duration || (V.scenes.length ? V.scenes[V.scenes.length - 1].end : 60)));
+  const totalW = Math.max(600, Math.max(V.totalSnaps, V.snapshots.length) * SNAP_W);
+  const tickStep = dur > 1800 ? 120 : dur > 300 ? 30 : dur > 60 ? 10 : 5;
+  let rulerHtml = "";
+  for (let t = 0; t <= dur; t += tickStep) {
+    const leftPct = Math.min(98, (t / dur) * 100);
+    rulerHtml += `<div class="ce-vis-tick" style="left:${leftPct.toFixed(2)}%">${fmt(t)}</div>`;
+  }
+  for (const sc of V.scenes.slice(0, 150)) {
+    const leftPct = Math.max(0, Math.min(99, (sc.start / dur) * 100));
+    rulerHtml += `<div class="ce-scene-mark" style="left:${leftPct.toFixed(2)}%" title="${esc((sc.layout || sc.method || "scene") + " " + fmt(sc.start) + "–" + fmt(sc.end))}">${esc(sc.layout || sc.method || "scene")}</div>`;
+  }
+
+  box.innerHTML = `<div class="ce-vis-card"><div class="ce-vis-head">
+      <div class="ce-vis-badges">
+        <span class="pill ok">${V.scenes.length} scene${V.scenes.length === 1 ? "" : "s"}</span>
+        <span class="pill ok">${V.totalSnaps} snapshot${V.totalSnaps === 1 ? "" : "s"}</span>
+        <span class="pill">${V.totalMoments} moment${V.totalMoments === 1 ? "" : "s"}</span>
+        ${fcBadge}${capBadge}
+        ${vis.pending ? `<span class="pill warn">Live tail pending</span>` : ""}
+      </div>
+      <button class="btn sm" data-act="analyzevis" data-j="${esc(jid)}" data-force="1">Re-analyze</button>
+    </div>
+    <div class="ce-vis-strip">
+      <div class="ce-vis-viewport" id="vsStripViewport">
+        <div class="ce-vis-track" id="vsTrack" style="width:${totalW}px">
+          <div class="ce-vis-ruler">${rulerHtml}</div>
+          <div class="ce-vis-items" id="vsItems"></div>
+        </div>
+      </div>
+    </div>
+    <div id="vsInspector"></div>
+    <div class="ce-vis-card" style="margin:0;padding:14px">
+      <h3 style="margin-bottom:10px;font-size:14px">Transcript & visual moments</h3>
+      <div id="vsMoments"></div>
+    </div></div>`;
+
+  const vp = $("#vsStripViewport");
+  vp.addEventListener("scroll", scheduleVirtualStrip, {passive: true});
+  const itemsEl = $("#vsItems");
+  itemsEl.addEventListener("pointerover", e => {
+    const btn = e.target.closest(".ce-snap-card");
+    if (btn) syncFromSnap(Number(btn.dataset.sidx), false);
+  });
+  itemsEl.addEventListener("click", e => {
+    const btn = e.target.closest(".ce-snap-card");
+    if (btn) syncFromSnap(Number(btn.dataset.sidx), true);
+  });
+  const momBox = $("#vsMoments");
+  momBox.addEventListener("pointerover", e => {
+    const row = e.target.closest(".ce-moment-row");
+    if (row) syncFromMoment(Number(row.dataset.midx), true);
+  });
+  momBox.addEventListener("click", e => {
+    const row = e.target.closest(".ce-moment-row");
+    if (row) syncFromMoment(Number(row.dataset.midx), true);
+  });
+
+  renderVirtualStrip();
+  drawMomentsPanel();
+  if (V.snapshots.length) drawInspector(V.snapshots.find(s => s.id === V.activeSnapId) || V.snapshots[0]);
+}
 
 /* ============================================================ Colab Cloud Sync */
 let colabStatus = null;

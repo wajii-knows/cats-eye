@@ -11,11 +11,12 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote, urlparse
 
 import sqlalchemy as sa
 import uvicorn
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
@@ -679,12 +680,12 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
 # ================================================================ app status
 @app.get("/api/status")
 def status(request: Request):
-    from . import notices
-    from . import updates
+    from . import flags, notices, updates
     me_ = _me(request)
     return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
+            "snapshots_enabled": flags.is_on("PEAKCUT_SNAPSHOTS"), "ai_image_input": ai.capabilities()["image_input"],
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS}
 
 
@@ -1065,6 +1066,179 @@ def cancel_job(jid: str):
     job = _job_or_404(jid)
     jobs.cancel(jid)
     return {"ok": True}
+
+
+# ================================================================ visual understanding APIs (PEAKCUT_SNAPSHOTS)
+def _require_snapshots_flag():
+    from . import flags
+    if not flags.is_on("PEAKCUT_SNAPSHOTS"):
+        raise HTTPException(404, "Not Found")
+
+
+def _opt_float(raw: str, name: str) -> Optional[float]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except ValueError:
+        raise HTTPException(400, f"Invalid numeric parameter: {name}")
+    return v
+
+
+def _paginate(items: list, limit: str = "", cursor: str = "", default_limit: int = 100, max_limit: int = 250) -> dict:
+    s_lim = str(limit or "").strip()
+    if not s_lim:
+        lim = default_limit
+    else:
+        try:
+            lim = max(1, min(max_limit, int(s_lim)))
+        except ValueError:
+            raise HTTPException(400, "Invalid limit")
+    offset = 0
+    s_cur = str(cursor or "").strip()
+    if s_cur:
+        try:
+            offset = max(0, int(s_cur))
+        except ValueError:
+            raise HTTPException(400, "Invalid pagination cursor")
+    total = len(items)
+    page = items[offset: offset + lim]
+    next_offset = offset + len(page)
+    has_more = next_offset < total
+    return {
+        "items": page,
+        "total": total,
+        "limit": lim,
+        "cursor": str(offset),
+        "next_cursor": str(next_offset) if has_more else None,
+        "has_more": has_more,
+    }
+
+
+def _safe_snapshot_view(jid: str, snap: dict, captions_map: Optional[dict] = None) -> dict:
+    out = {k: v for k, v in snap.items() if k not in ("path", "thumb_path", "analysis_path", "_bytes")}
+    sid = snap.get("id", "")
+    if captions_map and sid in captions_map and not out.get("caption"):
+        out["caption"] = captions_map[sid]
+    out["thumb_url"] = f"/api/videos/{jid}/snapshots/{sid}/image?size=thumb"
+    out["analysis_url"] = f"/api/videos/{jid}/snapshots/{sid}/image?size=analysis"
+    out["full_url"] = f"/api/videos/{jid}/snapshots/{sid}/image?size=full"
+    return out
+
+
+@app.post("/api/videos/{jid}/analyze")
+def analyze_video_visuals(jid: str, body: dict = Body(default={})):
+    _require_snapshots_flag()
+    job = _job_or_404(jid)
+    vis = job.get("visuals") or {}
+    force = bool((body or {}).get("force"))
+    if vis.get("status") == "analyzing" and not force:
+        return {"ok": True, "visuals": vis}
+    from .pipeline import visuals
+    vis_state = {
+        **(vis if isinstance(vis, dict) else {}),
+        "status": "analyzing",
+        "progress": 0.02,
+        "stage": "Queued for visual analysis",
+        "error": None,
+    }
+    job["visuals"] = vis_state
+    jobs.save(job)
+
+    def _run():
+        try:
+            visuals.run_visual_analysis(jid, force=force)
+        except Exception:
+            pass
+
+    jobs.submit(_run)
+    return {"ok": True, "visuals": vis_state}
+
+
+@app.get("/api/videos/{jid}/scenes")
+def video_scenes(jid: str, limit: str = "", cursor: str = ""):
+    _require_snapshots_flag()
+    job = _job_or_404(jid)
+    from .pipeline import visuals
+    payload = visuals.load_visual_data(job, "analyze_snapshots", "analyzed_scenes.json") or visuals.load_visual_data(
+        job, "detect_scenes", "scenes.json"
+    )
+    scenes = list((payload or {}).get("scenes", []))
+    page = _paginate(scenes, limit=limit, cursor=cursor, default_limit=200, max_limit=500)
+    vis = job.get("visuals") or {}
+    return {
+        **page,
+        "pending": bool((payload or {}).get("pending", vis.get("pending", False))),
+        "pending_from": (payload or {}).get("pending_from", vis.get("pending_from")),
+        "facecam_box": (payload or {}).get("facecam_box", vis.get("facecam_box")),
+    }
+
+
+@app.get("/api/videos/{jid}/snapshots")
+def video_snapshots(jid: str, t_from: str = Query("", alias="from"), t_to: str = Query("", alias="to"), limit: str = "", cursor: str = ""):
+    _require_snapshots_flag()
+    job = _job_or_404(jid)
+    from .pipeline import visuals
+    from .pipeline.visual_index import snapshots_in
+    f_val = _opt_float(t_from, "from")
+    t_val = _opt_float(t_to, "to")
+    payload = visuals.load_visual_data(job, "analyze_snapshots", "analyzed_snapshots.json") or visuals.load_visual_data(
+        job, "extract_snapshots", "snapshots.json"
+    )
+    cap_payload = visuals.load_visual_data(job, "caption_snapshots", "captions.json") or {}
+    captions_map = cap_payload.get("captions") if isinstance(cap_payload.get("captions"), dict) else {}
+    snaps = list((payload or {}).get("snapshots", []))
+    if f_val is not None or t_val is not None:
+        lo = f_val if f_val is not None else 0.0
+        hi = t_val if t_val is not None else 1e12
+        snaps = snapshots_in(snaps, lo, hi)
+    page = _paginate(snaps, limit=limit, cursor=cursor, default_limit=100, max_limit=250)
+    page["items"] = [_safe_snapshot_view(jid, s, captions_map=captions_map) for s in page["items"]]
+    page["pending"] = bool((payload or {}).get("pending", False))
+    page["pending_from"] = (payload or {}).get("pending_from")
+    page["captions_status"] = cap_payload.get("status") or (job.get("visuals") or {}).get("captions_status", "")
+    page["captions_message"] = cap_payload.get("reason") or (job.get("visuals") or {}).get("captions_message", "")
+    return page
+
+
+@app.get("/api/videos/{jid}/snapshots/{sid}/image")
+def video_snapshot_image(jid: str, sid: str, size: str = "thumb"):
+    _require_snapshots_flag()
+    job = _job_or_404(jid)
+    if size not in ("thumb", "analysis", "full"):
+        raise HTTPException(400, "size must be thumb, analysis, or full")
+    from .pipeline import visuals
+    try:
+        resolved = visuals.resolve_snapshot_image(job, sid, size=size)
+    except ValueError:
+        raise HTTPException(404, "No such snapshot")
+    if not resolved:
+        raise HTTPException(404, "No such snapshot")
+    img_path, mime = resolved
+    return FileResponse(img_path, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/videos/{jid}/moments")
+def video_moments(jid: str, t_from: str = Query("", alias="from"), t_to: str = Query("", alias="to"), limit: str = "", cursor: str = ""):
+    _require_snapshots_flag()
+    job = _job_or_404(jid)
+    from .pipeline import visuals
+    f_val = _opt_float(t_from, "from")
+    t_val = _opt_float(t_to, "to")
+    payload = visuals.load_visual_data(job, "build_moments", "moments.json")
+    moments = list((payload or {}).get("moments", []))
+    segments = list((payload or {}).get("segments", []))
+    if f_val is not None or t_val is not None:
+        lo = f_val if f_val is not None else 0.0
+        hi = t_val if t_val is not None else 1e12
+        moments = [m for m in moments if float(m["end"]) > lo and float(m["start"]) < hi]
+    page = _paginate(moments, limit=limit, cursor=cursor, default_limit=100, max_limit=250)
+    wanted_seg_ids = {sid for m in page["items"] for sid in (m.get("transcript_segment_ids") or [])}
+    page["segments"] = [s for s in segments if s.get("id") in wanted_seg_ids] if wanted_seg_ids else []
+    page["pending"] = bool((payload or {}).get("pending", False))
+    page["pending_from"] = (payload or {}).get("pending_from")
+    return page
 
 
 def _pairs(v, limit=300) -> list:

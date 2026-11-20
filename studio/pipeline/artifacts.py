@@ -28,7 +28,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 import sqlalchemy as sa
 from studio import config, ctx, db
@@ -43,6 +43,17 @@ def _validate_segment(value: str, label: str) -> str:
     if not _SEG_RE.fullmatch(s) or ".." in s or s in (".", ".."):
         raise ValueError(f"Invalid {label}: {value!r}")
     return s
+
+
+def _validate_rel_path(value: str, label: str) -> Path:
+    raw = str(value or "").replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or ":" in raw:
+        raise ValueError(f"Invalid {label}: {value!r}")
+    parts = [p for p in raw.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    safe_parts = [_validate_segment(p, label) for p in parts]
+    return Path(*safe_parts)
 
 
 def _sha256_file(path: Path) -> str:
@@ -137,8 +148,9 @@ class ArtifactStore:
         files: Dict[str, Union[str, Path]],
         metadata: Optional[Dict[str, Any]] = None,
         version: int = 1,
+        dirs: Optional[Dict[str, Union[str, Path]]] = None,
     ) -> Dict[str, Any]:
-        """Atomically store files and manifest under the given stage and fingerprint.
+        """Atomically store files, optional subdirectories, and manifest under the given stage and fingerprint.
 
         If the destination already exists, it is reused and the existing manifest is returned.
         """
@@ -153,20 +165,39 @@ class ArtifactStore:
             # Destination already exists: reuse it
             return self.get(fp, stage=stg) or {}
 
-        # Atomic temp directory
-        tmp_dir = (parent / f".tmp_{fp}_{os.getpid()}_{int(time.time() * 1000)}").resolve()
+        # Atomic temp directory (short prefix for Windows MAX_PATH safety)
+        tmp_dir = (parent / f".tmp_{fp[:12]}_{os.getpid()}_{int(time.time() * 1000) % 100000}").resolve()
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             sha256_map = {}
             total_bytes = 0
 
-            for out_name, src in files.items():
-                safe_name = _validate_segment(out_name, "artifact output name")
-                src_path = Path(src)
-                target_path = (tmp_dir / safe_name).resolve()
+            entries: List[tuple[str, Path, Path]] = []
+            for out_name, src in (files or {}).items():
+                rel_p = _validate_rel_path(out_name, "artifact output name")
+                entries.append((rel_p.as_posix(), rel_p, Path(src)))
+
+            for sub_name, src_root in (dirs or {}).items():
+                safe_sub = _validate_segment(sub_name, "artifact dir name")
+                root_path = Path(src_root)
+                if not root_path.is_dir():
+                    continue
+                for r_dir, _dnames, fnames in os.walk(str(root_path)):
+                    for fname in sorted(fnames):
+                        if fname.startswith(".") or ".tmp" in fname:
+                            continue
+                        src_f = Path(r_dir) / fname
+                        rel_inside = src_f.relative_to(root_path).as_posix()
+                        rel_posix = f"{safe_sub}/{rel_inside}"
+                        rel_p = _validate_rel_path(rel_posix, "artifact dir entry")
+                        entries.append((rel_p.as_posix(), rel_p, src_f))
+
+            for safe_posix, rel_p, src_path in entries:
+                target_path = (tmp_dir / rel_p).resolve()
                 if not target_path.is_relative_to(tmp_dir):
-                    raise ValueError(f"Output path escapes artifact dir: {out_name!r}")
+                    raise ValueError(f"Output path escapes artifact dir: {safe_posix!r}")
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 if src_path.resolve() != target_path:
                     shutil.copy2(str(src_path), str(target_path))
                 # Flush and fsync
@@ -176,7 +207,7 @@ class ArtifactStore:
                     except OSError:
                         pass
                 file_hash = _sha256_file(target_path)
-                sha256_map[safe_name] = file_hash
+                sha256_map[safe_posix] = file_hash
                 total_bytes += target_path.stat().st_size
 
             now = time.time()
@@ -208,24 +239,28 @@ class ArtifactStore:
             # Record in DB artifacts table scoped to self.user_id
             try:
                 with db.engine.begin() as conn:
-                    conn.execute(
-                        db.artifacts.delete().where(
-                            sa.and_(db.artifacts.c.fingerprint == fp, db.artifacts.c.user_id == self.user_id)
+                    existing_uid = conn.execute(
+                        sa.select(db.artifacts.c.user_id).where(db.artifacts.c.fingerprint == fp)
+                    ).scalar()
+                    vals = {
+                        "fingerprint": fp,
+                        "stage": stg,
+                        "version": version,
+                        "user_id": self.user_id,
+                        "path": str(dest),
+                        "size_bytes": total_bytes,
+                        "created_at": now,
+                        "accessed_at": now,
+                        "metadata_json": json.dumps(metadata),
+                    }
+                    if existing_uid is None:
+                        conn.execute(db.artifacts.insert().values(**vals))
+                    elif existing_uid == self.user_id:
+                        conn.execute(
+                            db.artifacts.update()
+                            .where(sa.and_(db.artifacts.c.fingerprint == fp, db.artifacts.c.user_id == self.user_id))
+                            .values(**{k: v for k, v in vals.items() if k != "fingerprint"})
                         )
-                    )
-                    conn.execute(
-                        db.artifacts.insert().values(
-                            fingerprint=fp,
-                            stage=stg,
-                            version=version,
-                            user_id=self.user_id,
-                            path=str(dest),
-                            size_bytes=total_bytes,
-                            created_at=now,
-                            accessed_at=now,
-                            metadata_json=json.dumps(metadata),
-                        )
-                    )
             except Exception as e:
                 logger.warning("Could not record artifact in DB: %s", e)
 
@@ -304,6 +339,81 @@ class ArtifactStore:
                     except OSError:
                         pass
         return total
+
+    def evict_stage_cache(
+        self,
+        stage: str,
+        max_bytes: int,
+        durable_store: Any,
+        protect_fingerprints: Optional[Set[str]] = None,
+    ) -> List[str]:
+        """Evict oldest local artifact packs for `stage` once verified on `durable_store` until <= max_bytes."""
+        if max_bytes < 0 or durable_store is None:
+            return []
+        stg = _validate_segment(stage, "stage")
+        stage_dir = (self.root / stg).resolve()
+        if not stage_dir.is_dir():
+            return []
+        protected = set(protect_fingerprints or ())
+        accessed_map: Dict[str, float] = {}
+        try:
+            with db.engine.connect() as conn:
+                rows = conn.execute(
+                    sa.select(db.artifacts.c.fingerprint, db.artifacts.c.accessed_at).where(
+                        sa.and_(db.artifacts.c.user_id == self.user_id, db.artifacts.c.stage == stg)
+                    )
+                ).fetchall()
+                for fp_row, acc_t in rows:
+                    accessed_map[str(fp_row)] = float(acc_t or 0.0)
+        except Exception:
+            pass
+
+        entries = []
+        total_bytes = 0
+        for bucket in stage_dir.iterdir():
+            if not bucket.is_dir():
+                continue
+            for cand in bucket.iterdir():
+                if not cand.is_dir() or cand.name.startswith("."):
+                    continue
+                mf = cand / "manifest.json"
+                if not mf.is_file():
+                    continue
+                fp_name = cand.name
+                sz = 0
+                for r_dir, _dnames, fnames in os.walk(str(cand)):
+                    for fn in fnames:
+                        try:
+                            sz += os.path.getsize(os.path.join(r_dir, fn))
+                        except OSError:
+                            pass
+                total_bytes += sz
+                try:
+                    mtime = mf.stat().st_mtime
+                except OSError:
+                    mtime = 0.0
+                entries.append((accessed_map.get(fp_name, mtime), mtime, fp_name, cand, sz))
+
+        if total_bytes <= max_bytes:
+            return []
+
+        entries.sort(key=lambda x: (x[0], x[1]))
+        evicted: List[str] = []
+        for _acc, _mt, fp_name, cand, sz in entries:
+            if total_bytes <= max_bytes:
+                break
+            if fp_name in protected:
+                continue
+            rel_candidates = (
+                f"users/{self.user_id}/artifacts/{stg}/{fp_name[:2]}/{fp_name}/{fp_name}.tar",
+                f"artifacts/{stg}/{fp_name[:2]}/{fp_name}/{fp_name}.tar",
+            )
+            if not any(durable_store.exists(rp) for rp in rel_candidates):
+                continue
+            shutil.rmtree(str(cand), ignore_errors=True)
+            total_bytes -= sz
+            evicted.append(fp_name)
+        return evicted
 
 
 # Module-level convenience functions

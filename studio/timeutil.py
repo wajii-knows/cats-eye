@@ -40,3 +40,14 @@ def sec_to_ass(t: float) -> str:
     val = max(0.0, float(t))
     h, m = int(val // 3600), int(val % 3600 // 60)
     return f"{h}:{m:02d}:{val % 60:05.2f}"
+
+
+from studio.pipeline.visual_index import (  # noqa: E402, F401
+    VisualTimelineIndex,
+    nearest_snapshot,
+    scene_at,
+    scenes_overlapping,
+    segment_at,
+    snapshots_in,
+    words_in,
+)

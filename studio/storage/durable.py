@@ -87,7 +87,7 @@ class LocalFolderStore(DurableStore):
         self.root.mkdir(parents=True, exist_ok=True)
         self.session_id = session_id or uuid.uuid4().hex[:8]
         self.manifest_path = self.root / "manifest.json"
-        self._manifest_lock = threading.Lock()
+        self._manifest_lock = threading.RLock()
         self._manifest = self._load_manifest()
 
     def _load_manifest(self) -> Dict[str, Any]:
@@ -144,7 +144,7 @@ class LocalFolderStore(DurableStore):
         expected_size = src.stat().st_size
         expected_sha = compute_sha256(src)
 
-        tmp_name = f"{dest.name}.tmp.{self.session_id}_{int(time.time() * 1000)}"
+        tmp_name = f".tmp.{self.session_id}_{uuid.uuid4().hex[:8]}"
         tmp_path = dest.parent / tmp_name
 
         try:
@@ -226,7 +226,7 @@ class LocalFolderStore(DurableStore):
         dest = Path(local_dest_path).resolve()
         dest.parent.mkdir(parents=True, exist_ok=True)
 
-        tmp_dest = dest.parent / f"{dest.name}.tmp.{self.session_id}_{int(time.time() * 1000)}"
+        tmp_dest = dest.parent / f".tmp.{self.session_id}_{uuid.uuid4().hex[:8]}"
         shutil.copyfile(str(src), str(tmp_dest))
 
         with tmp_dest.open("rb") as f:
@@ -343,8 +343,18 @@ class FaultInjectingStore(DurableStore):
         self.crash_before_manifest_commit = False
         self.inject_latency_sec = 0.0
         self.fail_reads = False
+        self.fail_after_n_writes: Optional[int] = None
+        self.fail_on_path_substring: Optional[str] = None
+        self.on_put_callback: Optional[Any] = None
+        self.write_count = 0
 
     def put_file(self, local_path: Union[str, Path], durable_rel_path: str) -> Dict[str, Any]:
+        if self.on_put_callback:
+            self.on_put_callback(durable_rel_path)
+        if self.fail_on_path_substring and self.fail_on_path_substring in durable_rel_path:
+            raise DurableStoreError(f"Simulated write failure on {durable_rel_path}")
+        if self.fail_after_n_writes is not None and self.write_count >= self.fail_after_n_writes:
+            raise DurableStoreError("Simulated crash after N durable writes")
         if self.inject_latency_sec > 0:
             time.sleep(self.inject_latency_sec)
         if self.drop_writes:
@@ -357,7 +367,9 @@ class FaultInjectingStore(DurableStore):
                 tf.write(src.read_bytes()[: self.truncate_writes_to])
                 truncated_src = tf.name
             try:
-                return self.wrapped.put_file(truncated_src, durable_rel_path)
+                res = self.wrapped.put_file(truncated_src, durable_rel_path)
+                self.write_count += 1
+                return res
             finally:
                 Path(truncated_src).unlink(missing_ok=True)
 
@@ -378,10 +390,25 @@ class FaultInjectingStore(DurableStore):
                 shutil.copyfile(str(local_path), str(dest))
             raise DurableStoreError("Simulated crash before manifest commit")
 
-        return self.wrapped.put_file(local_path, durable_rel_path)
+        res = self.wrapped.put_file(local_path, durable_rel_path)
+        self.write_count += 1
+        return res
 
     def put_dir_packed(self, local_dir: Union[str, Path], durable_rel_path: str, archive_name: Optional[str] = None) -> Dict[str, Any]:
-        return self.wrapped.put_dir_packed(local_dir, durable_rel_path, archive_name=archive_name)
+        src_dir = Path(local_dir).resolve()
+        if not src_dir.is_dir():
+            raise FileNotFoundError(f"Local directory does not exist: {src_dir}")
+        if durable_rel_path.endswith((".tar", ".tar.gz", ".tgz")):
+            rel_target = durable_rel_path
+            arch_name = Path(durable_rel_path).name
+        else:
+            arch_name = archive_name or f"{src_dir.name}.tar"
+            rel_target = f"{durable_rel_path.rstrip('/\\')}/{arch_name}"
+        with tempfile.TemporaryDirectory(prefix="ce_fault_pack_") as tmp_pack:
+            tar_path = Path(tmp_pack) / arch_name
+            with tarfile.open(tar_path, "w") as tar:
+                tar.add(str(src_dir), arcname=".")
+            return self.put_file(tar_path, rel_target)
 
     def get_file(self, durable_rel_path: str, local_dest_path: Union[str, Path]) -> Path:
         if self.fail_reads:

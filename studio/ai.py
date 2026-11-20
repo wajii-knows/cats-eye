@@ -12,6 +12,7 @@ import json
 import os
 import re
 import threading
+from typing import Optional
 
 import httpx
 
@@ -96,8 +97,10 @@ def public() -> dict:
     """What the settings page may see. The key itself never leaves the server: only whether there is one, and
     its last four characters so the owner can tell which key it is."""
     c = current()
+    first_model = c["models"][0] if c["models"] else ""
     return {"provider": c["provider"], "models": c["models"], "base_url": c["base_url"], "has_key": bool(c["key"]),
             "key_hint": c["key"][-4:] if len(c["key"]) >= 12 else "", "ready": ready(), "label": label(),
+            "image_input": bool(supports_images(c["provider"], first_model)),
             "saved_here": bool(_from_dashboard().get("provider")),
             "providers": [{"id": k, "label": v[0], "address": v[1], "needs_key": k not in NO_KEY, "key_url": v[3], "example": v[4]}
                           for k, v in PROVIDERS.items()]}
@@ -259,7 +262,25 @@ def supports_images(prov: str = None, model: str = "") -> bool:
         return any(tok in m for tok in ("vision", "grok-4", "grok-2-vision"))
     if p == "openrouter":
         return any(tok in m for tok in ("gemini", "gpt-4o", "gpt-4.1", "claude-3", "claude-4", "vision"))
+    if p in ("groq", "ollama", "custom"):
+        return any(tok in m for tok in ("vision", "llava", "bakllava", "moondream", "qwen2-vl", "qwen2.5-vl", "llama-4"))
     return False
+
+
+def capabilities(prov: Optional[str] = None, model: Optional[str] = None) -> dict:
+    """Lookup model/provider capabilities (image input, JSON mode, readiness)."""
+    c = current()
+    raw_p = prov if prov is not None else c["provider"]
+    p = ALIASES.get(str(raw_p or "").strip().lower(), str(raw_p or "").strip().lower())
+    ms = c["models"] or []
+    m = model if model is not None else (ms[0] if ms else "")
+    return {
+        "ready": bool(ready()) if prov is None else bool(p in PROVIDERS and m),
+        "provider": p,
+        "model": m,
+        "image_input": bool(supports_images(p, m)),
+        "json_mode": p in PROVIDERS,
+    }
 
 
 def call(model: str, prompt: str, schema: dict, images: list = None):

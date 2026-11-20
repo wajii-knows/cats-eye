@@ -35,7 +35,12 @@ from studio.pipeline.stage import (
     compute_stage_fingerprint,
 )
 from studio.pipeline.stages import (
+    AnalyzeSnapshotsStage,
+    BuildMomentsStage,
+    CaptionSnapshotsStage,
+    DetectScenesStage,
     ExtractAudioStage,
+    ExtractSnapshotsStage,
     FetchStage,
     PostStage,
     ProbeStage,
@@ -110,6 +115,11 @@ class PipelineEngine:
             "select_clips": SelectClipsStage(),
             "render_clip": RenderClipStage(),
             "post": PostStage(),
+            "detect_scenes": DetectScenesStage(),
+            "extract_snapshots": ExtractSnapshotsStage(),
+            "analyze_snapshots": AnalyzeSnapshotsStage(),
+            "caption_snapshots": CaptionSnapshotsStage(),
+            "build_moments": BuildMomentsStage(),
         }
 
     def _log_event(self, event_name: str, **kwargs) -> None:
@@ -201,13 +211,14 @@ class PipelineEngine:
         run_id = f"{job_id}_{stage_name}_{int(time.time() * 1000)}"
         params = stage.get_params(ctx)
 
-        # 1. Compute deterministic fingerprint
+        # 1. Compute deterministic fingerprint (exclude self from upstreams so re-runs hit cache)
+        upstreams = {k: v for k, v in (ctx.upstream_fingerprints or {}).items() if k != stage.name}
         fp = compute_stage_fingerprint(
             stage_name=stage.name,
             stage_version=stage.version,
             source_identifier=source_id,
             params=params,
-            upstream_fingerprints=ctx.upstream_fingerprints,
+            upstream_fingerprints=upstreams,
         )
 
         ctx.job.setdefault("stages", {})
@@ -220,20 +231,26 @@ class PipelineEngine:
         if stage.cacheable:
             cached_manifest = ctx.store.get(fp, stage=stage.name)
             d_store = self.durable_store or ctx.durable_store
-            if not cached_manifest and d_store:
-                for rel_pack in (
-                    f"users/{ctx.user_id}/artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
-                    f"artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
-                ):
-                    if d_store.exists(rel_pack):
-                        try:
-                            dest_local = ctx.store.root / stage.name / fp[:2] / fp
-                            d_store.get_dir_unpacked(rel_pack, dest_local)
-                            cached_manifest = ctx.store.get(fp, stage=stage.name)
-                            if cached_manifest:
-                                break
-                        except Exception as e:
-                            logger.warning("Error restoring artifact from durable store: %s", e)
+            pack_candidates = (
+                f"users/{ctx.user_id}/artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
+                f"artifacts/{stage.name}/{fp[:2]}/{fp}/{fp}.tar",
+            )
+            if d_store:
+                durable_has_pack = any(d_store.exists(rp) for rp in pack_candidates)
+                if cached_manifest and not durable_has_pack:
+                    # A stage counts as complete for resume only once verified in DurableStore
+                    cached_manifest = None
+                elif not cached_manifest and durable_has_pack:
+                    for rel_pack in pack_candidates:
+                        if d_store.exists(rel_pack):
+                            try:
+                                dest_local = ctx.store.root / stage.name / fp[:2] / fp
+                                d_store.get_dir_unpacked(rel_pack, dest_local)
+                                cached_manifest = ctx.store.get(fp, stage=stage.name)
+                                if cached_manifest:
+                                    break
+                            except Exception as e:
+                                logger.warning("Error restoring artifact from durable store: %s", e)
 
             if cached_manifest:
                 self._log_event(
@@ -259,6 +276,7 @@ class PipelineEngine:
                 ctx.job["stages"][stage.name] = {
                     "status": "skipped_cached",
                     "cached": True,
+                    "durable_done": True,
                     "duration_ms": 0.0,
                     "fingerprint": fp,
                 }
@@ -266,9 +284,10 @@ class PipelineEngine:
                 cached_outputs = dict(cached_manifest.get("metadata", {}).get("outputs", {}))
                 art_dir = cached_manifest.get("_dir")
                 if art_dir:
+                    cached_outputs["_artifact_dir"] = art_dir
                     art_path = Path(art_dir)
                     for k, v in list(cached_outputs.items()):
-                        if isinstance(v, str):
+                        if isinstance(v, str) and not k.startswith("_"):
                             cand = art_path / Path(v).name
                             if cand.is_file():
                                 cached_outputs[k] = str(cand)
@@ -418,7 +437,7 @@ class PipelineEngine:
         # 5. Persist output artifacts if cacheable (skip raw media > 50MB and inline transcript words)
         files_to_store = {}
         for k, v in outputs.items():
-            if k in ("source_video", "audio_wav", "audio_file"):
+            if k in ("source_video", "audio_wav", "audio_file", "proxy_video", "artifact_dirs"):
                 continue
             if isinstance(v, (str, Path)) and Path(v).is_file():
                 p = Path(v)
@@ -428,38 +447,89 @@ class PipelineEngine:
                 except OSError:
                     pass
 
+        artifact_dirs = outputs.get("artifact_dirs") if isinstance(outputs.get("artifact_dirs"), dict) else None
         meta_outputs = {
             k: str(v) if isinstance(v, Path) else v
             for k, v in outputs.items()
-            if k != "transcript_words"
+            if k not in ("transcript_words", "artifact_dirs")
         }
+        if artifact_dirs:
+            meta_outputs["packed_subdirs"] = list(artifact_dirs.keys())
 
+        stored_artifact_names = list(files_to_store.keys())
         if stage.cacheable:
             try:
-                ctx.store.put(
+                put_manifest = ctx.store.put(
                     stage=stage.name,
                     fingerprint=fp,
                     files=files_to_store,
                     metadata={"outputs": meta_outputs},
                     version=stage.version,
+                    dirs=artifact_dirs,
                 )
+                stored_artifact_names = list(put_manifest.get("sha256_map", {}).keys()) or stored_artifact_names
+                if put_manifest.get("_dir"):
+                    outputs["_artifact_dir"] = put_manifest["_dir"]
             except Exception as e:
                 logger.warning("Could not cache artifact for %s: %s", stage.name, e)
 
         d_store = self.durable_store or ctx.durable_store
         durable_synced = False
         if d_store and stage.cacheable:
-            try:
-                dest_local = ctx.store.root / stage.name / fp[:2] / fp
-                if dest_local.is_dir():
+            dest_local = ctx.store.root / stage.name / fp[:2] / fp
+            if dest_local.is_dir():
+                try:
                     d_store.put_dir_packed(
                         dest_local,
                         f"users/{ctx.user_id}/artifacts/{stage.name}/{fp[:2]}/{fp}",
                         archive_name=f"{fp}.tar",
                     )
                     durable_synced = True
-            except Exception as e:
-                logger.warning("Could not sync artifact to durable store: %s", e)
+                except Exception as e:
+                    err = StageError(
+                        "DURABLE_SYNC_FAILED",
+                        f"Could not sync {stage.name} artifact pack to durable store: {e}",
+                        retryable=True,
+                    )
+                    self._record_stage_run(
+                        run_id=run_id,
+                        job_id=job_id,
+                        stage_name=stage.name,
+                        status="failed",
+                        started_at=t0,
+                        finished_at=time.time(),
+                        duration_ms=(time.time() - t0) * 1000,
+                        fingerprint=fp,
+                        output_artifacts=stored_artifact_names,
+                        error=err.to_dict(),
+                        local_done=True,
+                        durable_done=False,
+                    )
+                    ctx.job["stages"][stage.name] = {
+                        "status": "failed",
+                        "error": err.message,
+                        "duration_ms": round((time.time() - t0) * 1000, 1),
+                        "fingerprint": fp,
+                        "durable_done": False,
+                    }
+                    raise err from e
+            if durable_synced and stage.name == "extract_snapshots":
+                # Clean up temporary per-batch checkpoint packs once full artifact pack is verified on Drive
+                try:
+                    batch_prefix = f"users/{ctx.user_id}/checkpoints/{job_id}/extract_snapshots_batch_"
+                    for rel_bp in d_store.list(batch_prefix):
+                        d_store.delete(rel_bp)
+                except Exception:
+                    pass
+                try:
+                    ctx.store.evict_stage_cache(
+                        "extract_snapshots",
+                        int(config.SNAPSHOT_LOCAL_CACHE_MAX_MB * 1024 * 1024),
+                        d_store,
+                        protect_fingerprints={fp},
+                    )
+                except Exception as e:
+                    logger.warning("Snapshot cache eviction check failed: %s", e)
         elif not d_store:
             durable_synced = True
 
@@ -472,7 +542,7 @@ class PipelineEngine:
             finished_at=t1,
             duration_ms=duration_ms,
             fingerprint=fp,
-            output_artifacts=list(files_to_store.keys()),
+            output_artifacts=stored_artifact_names,
             local_done=True,
             durable_done=durable_synced,
         )
@@ -485,6 +555,7 @@ class PipelineEngine:
         ctx.job["stages"][stage.name] = {
             "status": "done",
             "cached": False,
+            "durable_done": durable_synced,
             "duration_ms": round(duration_ms, 1),
             "fingerprint": fp,
         }

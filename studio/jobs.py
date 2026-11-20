@@ -149,6 +149,9 @@ def public(job) -> dict:
     out = {k: v for k, v in job.items() if k not in HIDDEN}
     out["source"] = {k: v for k, v in job["source"].items() if k != "path"}
     out["clips"] = [{k: v for k, v in c.items() if k not in ("src", "fixed_words", "fixed_for")} for c in job["clips"]]
+    if isinstance(job.get("visuals"), dict):
+        vis = dict(job["visuals"])
+        out["visuals"] = {k: v for k, v in vis.items() if not k.endswith("_path")}
     ai = job.get("ai") or {}
     out["ai"] = {"tokens": ai.get("tokens", 0), "note": ai.get("note", ""), "used": bool(ai.get("model"))}   # never the model, never raw errors
     if job.get("status") == "queued":
@@ -364,6 +367,11 @@ def delete(jid):
         if job:
             _by_user.get(job["user"], {}).pop(jid, None)
     if job:
+        try:
+            from studio.pipeline import visuals
+            visuals.cleanup_job_artifacts(job)
+        except Exception:
+            pass
         ctx.bump(job["user"])
         shutil.rmtree(job["dir"], ignore_errors=True)
     return bool(job)

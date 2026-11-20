@@ -124,6 +124,16 @@ python tests/run.py
 
 Starts a throwaway server on a temporary data directory, runs all test suites without external network or AI keys, and cleans up.
 
+## Visual Understanding (`PEAKCUT_SNAPSHOTS=1`)
+
+When `PEAKCUT_SNAPSHOTS=1` is set in `.env` (off by default), Cat's Eye exposes five cacheable visual analysis stages (`detect_scenes`, `extract_snapshots`, `analyze_snapshots`, `caption_snapshots`, `build_moments`) with Drive-packed archives and batch checkpoint resume in Colab mode, alongside:
+
+- `POST /api/videos/{id}/analyze` — Queue or retry visual analysis for a video
+- `GET /api/videos/{id}/scenes` — Paginated scenes with `method`, `layout`, `confidence`, and `facecam_box`
+- `GET /api/videos/{id}/snapshots?from=&to=&limit=&cursor=` — Time-filtered, paginated snapshots with local metrics
+- `GET /api/videos/{id}/snapshots/{sid}/image?size=thumb|analysis|full` — Lazy-unpacked WebP thumbnails, JPEG analysis frames, and on-demand full-resolution frames
+- `GET /api/videos/{id}/moments?from=&to=` — Half-open `[start, end)` timeline moments joining transcript segments, scenes, and snapshots
+
 ## Licence
 
 [MIT](LICENSE) — Copyright (c) 2026 PeakCut contributors; Copyright (c) 2026 Cat's Eye contributors.

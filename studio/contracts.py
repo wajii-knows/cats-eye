@@ -9,11 +9,36 @@ All models use Pydantic v2 and enforce strict validation:
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def make_scene_id(video_fp: str, start: float) -> str:
+    """Deterministic Scene ID derived from video fingerprint + start timestamp."""
+    raw = f"{video_fp}:scene:{round(float(start), 3):.3f}".encode("utf-8")
+    return "sc_" + hashlib.sha256(raw).hexdigest()[:16]
+
+
+def make_snapshot_id(video_fp: str, timestamp: float) -> str:
+    """Deterministic Snapshot ID derived from video fingerprint + timestamp."""
+    raw = f"{video_fp}:snap:{round(float(timestamp), 3):.3f}".encode("utf-8")
+    return "sn_" + hashlib.sha256(raw).hexdigest()[:16]
+
+
+def make_segment_id(video_fp: str, start: float, end: float) -> str:
+    """Deterministic TranscriptSegment ID derived from video fingerprint + span."""
+    raw = f"{video_fp}:seg:{round(float(start), 3):.3f}:{round(float(end), 3):.3f}".encode("utf-8")
+    return "seg_" + hashlib.sha256(raw).hexdigest()[:16]
+
+
+def make_moment_id(video_fp: str, start: float, end: float) -> str:
+    """Deterministic Moment ID derived from video fingerprint + span."""
+    raw = f"{video_fp}:moment:{round(float(start), 3):.3f}:{round(float(end), 3):.3f}".encode("utf-8")
+    return "mo_" + hashlib.sha256(raw).hexdigest()[:16]
 
 
 class ContractModel(BaseModel):
@@ -33,6 +58,12 @@ class Scene(ContractModel):
     dominant_color: Optional[str] = None
     motion_score: float = 0.0
     shot_type: Optional[str] = None
+    method: Literal["cut", "soft"] = "cut"
+    confidence: float = 1.0
+    layout: Optional[str] = None
+    layout_confidence: float = 0.0
+    facecam_box: Optional[List[float]] = None
+    pending: bool = False
 
     @model_validator(mode="after")
     def _validate_timing(self) -> "Scene":
@@ -40,6 +71,13 @@ class Scene(ContractModel):
             raise ValueError(f"Timestamps must be non-negative: start={self.start}, end={self.end}")
         if self.start >= self.end:
             raise ValueError(f"start must be strictly less than end: {self.start} >= {self.end}")
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0]: {self.confidence}")
+        if not (0.0 <= self.layout_confidence <= 1.0):
+            raise ValueError(f"layout_confidence must be in [0.0, 1.0]: {self.layout_confidence}")
+        if self.facecam_box is not None:
+            if len(self.facecam_box) != 4 or any(v < 0.0 or v > 1.0 for v in self.facecam_box):
+                raise ValueError(f"facecam_box must be normalized [x, y, w, h] in [0, 1]: {self.facecam_box}")
         return self
 
     def validate(self, check_files: bool = True) -> "Scene":
@@ -56,8 +94,21 @@ class Snapshot(ContractModel):
     width: int
     height: int
     blurriness: float = 0.0
-    face_count: int = 0
+    face_count: Optional[int] = 0
+    faces: Optional[int] = None
     primary_face_bbox: Optional[List[float]] = None  # [x, y, w, h] normalized 0..1 or pixels
+    thumb_path: Optional[str] = None
+    analysis_path: Optional[str] = None
+    dhash: str = ""
+    is_scene_boundary: bool = False
+    scene_id: Optional[str] = None
+    brightness: Optional[float] = None
+    blur: Optional[float] = None
+    edge_density: Optional[float] = None
+    motion: Optional[float] = None
+    face_boxes: Optional[List[List[float]]] = None
+    largest_face_box: Optional[List[float]] = None
+    caption: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def _validate_fields(self) -> "Snapshot":
@@ -65,8 +116,10 @@ class Snapshot(ContractModel):
             raise ValueError(f"Timestamp must be non-negative: timestamp={self.timestamp}")
         if self.width <= 0 or self.height <= 0:
             raise ValueError(f"Dimensions must be positive: width={self.width}, height={self.height}")
-        if self.face_count < 0:
+        if self.face_count is not None and self.face_count < 0:
             raise ValueError(f"face_count must be non-negative: {self.face_count}")
+        if self.faces is not None and self.faces < 0:
+            raise ValueError(f"faces must be non-negative: {self.faces}")
         return self
 
     def validate(self, check_files: bool = True) -> "Snapshot":
@@ -106,6 +159,7 @@ class TranscriptSegment(ContractModel):
     end: float
     text: str
     words: List[Word] = Field(default_factory=list)
+    id: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_timing(self) -> "TranscriptSegment":
@@ -123,15 +177,20 @@ class TranscriptSegment(ContractModel):
 
 
 class Moment(ContractModel):
-    """Candidate viral clip moment identified by AI or audio loudness analysis."""
+    """Candidate viral clip moment or timeline segment joining transcript and visual state."""
 
     id: str
     start: float
     end: float
-    score: float
-    reason: str
+    score: float = 0.0
+    reason: str = ""
     hook_text: str = ""
     suggested_title: str = ""
+    transcript_segment_ids: List[str] = Field(default_factory=list)
+    snapshot_ids: List[str] = Field(default_factory=list)
+    scene_ids: List[str] = Field(default_factory=list)
+    text: str = ""
+    pending: bool = False
 
     @model_validator(mode="after")
     def _validate_timing(self) -> "Moment":
