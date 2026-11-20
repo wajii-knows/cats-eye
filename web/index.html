@@ -531,7 +531,18 @@ img.av{object-fit:cover}
 .veil svg{width:15px;height:15px;margin-left:2px}
 .badge{position:absolute;top:10px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:var(--r-sm);background:rgba(15,17,23,.85);color:var(--text);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.08)}
 .badge.l{left:10px}.badge.r{right:10px}
-.badge.s-hi{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}.badge.s-mid{background:#34D399;color:#022C22;border-color:#34D399}
+.badge.s-hi{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}.badge.s-mid{background:#34D399;color:#022C22;border-color:#34D399}.badge.s-low{background:rgba(15,17,23,.85);color:var(--dim);border-color:var(--line)}
+.ss-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:var(--r-sm);background:var(--brand-soft);color:var(--brand);border:1px solid var(--brand-line);width:fit-content}
+.clip-scores{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-top:2px}
+.clip-scores b{color:var(--text);font-weight:600}
+.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0 6px}
+.score-cell{background:var(--frame);border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 8px;display:flex;flex-direction:column;gap:4px}
+.score-cell .sk{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)}
+.score-cell .sv{font-size:14px;font-weight:700;color:var(--text)}
+.score-bar{height:3px;border-radius:999px;background:var(--muted);overflow:hidden}
+.score-bar i{display:block;height:100%;border-radius:999px}
+.ss-quote{margin:6px 0 10px;padding:8px 10px;border-radius:var(--r-sm);background:var(--frame);border:1px solid var(--brand-line);font-size:12px;color:var(--text)}
+.ss-quote b{color:var(--brand);font-size:11px;text-transform:uppercase;letter-spacing:.03em;margin-right:6px}
 .making{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:14px;color:var(--dim);font-size:13px;font-weight:500;background:linear-gradient(110deg,#181B22 30%,#262B3A 50%,#181B22 70%);background-size:220% 100%;animation:shim 1.6s linear infinite}
 @keyframes shim{to{background-position:-220% 0}}
 .clip-body{padding:12px 14px;display:flex;flex-direction:column;gap:5px;flex:1}
@@ -1486,7 +1497,7 @@ function drawAdd(variant) {
       <div class="ob wide"><div class="ot">Clips</div><div class="nsteps">
         ${stepper("o_max", "How many", c?.max_clips ?? 6, 1, 20, 1, "")}
         ${stepper("o_min", "Shortest", c?.min_len ?? 15, 5, 120, 5, "s")}
-        ${stepper("o_maxlen", "Longest", c?.max_len ?? 60, 10, 180, 5, "s")}
+        ${stepper("o_maxlen", "Longest", c?.max_len ?? 35, 10, 180, 5, "s")}
       </div></div>
       <div class="ob"><div class="ot">Caption style</div>${choice("o_style", Object.entries(S.status.styles).map(([k, v]) => ({v:k, label:v, prev:capPrev(k)})), c?.style ?? "bounce")}</div>
       <div class="ob"><div class="ot">Layout</div>${choice("o_layout", Object.entries(S.status.layouts).map(([k, v]) => ({v:k, label:LAYOUT_SHORT[k] || v, title:v, prev:`<span class="lay-prev ${esc(k)}"><span class="ph"><i></i></span></span>`})), c?.layout ?? "blur")}</div>
@@ -1778,7 +1789,7 @@ async function makeClips() {
 }
 
 /* ============================================================ clips + jobs */
-function scoreCls(s) { return s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : ""; }
+function scoreCls(s) { return s >= 85 ? "s-hi" : s >= 70 ? "s-mid" : s > 0 ? "s-low" : ""; }
 function postPills(c) {
   return Object.values(c.posts || {}).filter(p => p.status !== "cancelled").map(p => {
     const cls = p.status === "posted" ? "ok" : p.status === "failed" ? "bad" : "warn";
@@ -1792,12 +1803,18 @@ function clipHtml(j, c) {
     : c.status === "error" ? `<span class="making" style="animation:none;color:var(--bad);background:var(--bad-soft)">Could not make this clip. Open it to try again.</span>`
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   const key = `c:${j.id}:${c.id}`, busyClip = c.status === "queued" || c.status === "rendering";
+  const sc = c.scores;
+  const scoreTip = sc ? `Hook ${Number(sc.hook ?? 0)} · Pacing ${Number(sc.pacing ?? 0)} · Payoff ${Number(sc.payoff ?? 0)} · Clarity ${Number(sc.clarity ?? 0)}` : "Viral score";
+  const isStopper = sc && (Number(sc.hook ?? 0) >= 80 || c.tier === "viral");
+  const miniScores = sc ? `<div class="clip-scores"><span>Hook <b>${Number(sc.hook ?? 0)}</b></span><span>Pace <b>${Number(sc.pacing ?? 0)}</b></span><span>Payoff <b>${Number(sc.payoff ?? 0)}</b></span></div>` : "";
   return `<article class="clip ${sel().has(key) ? "picked" : ""}">
     <button class="shot" data-act="openclip" ${a} aria-label="Open clip: ${esc(c.title || c.hook)}">${body}
-      <span class="badge l ${scoreCls(c.score)}" title="AI score">${c.score || "Hand"}</span><span class="badge r">${fmt(c.end - c.start)}</span></button>
+      <span class="badge l ${scoreCls(c.score)}" title="${esc(scoreTip)}">${c.score || "Hand"}</span><span class="badge r">${fmt(c.end - c.start)}</span></button>
     <div class="clip-body">
+      ${isStopper ? `<span class="ss-pill">Scroll-stopper</span>` : ""}
       <div class="hook">${esc(c.hook || "Untitled clip")}</div>
       <div class="ttl">${esc(c.title)}</div>
+      ${miniScores}
       ${postPills(c) ? `<div class="row" style="gap:4px">${postPills(c)}</div>` : ""}
       <div class="clip-foot">
         ${busyClip ? "" : `<label class="selck" title="Select this clip"><input type="checkbox" data-sel="${key}" ${sel().has(key) ? "checked" : ""} aria-label="Select this clip"></label>`}
@@ -2261,10 +2278,21 @@ function drawClipDlg(full) {
     : c.status === "error" ? `<div class="err" style="padding:20px;text-align:center">${esc(c.error || "Could not make this clip.")}</div>`
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   if (full) {
+    const tierLabel = c.tier ? ` · ${esc(c.tier.charAt(0).toUpperCase() + c.tier.slice(1))}` : "";
+    const sc = c.scores;
+    const scoreCells = sc ? `<div class="score-grid">${[
+      ["Hook", sc.hook], ["Pacing", sc.pacing], ["Payoff", sc.payoff], ["Clarity", sc.clarity]
+    ].map(([k, v]) => {
+      const n = Math.max(0, Math.min(100, Number(v ?? 0)));
+      const col = n >= 80 ? "var(--brand)" : n >= 65 ? "#34D399" : "var(--dim)";
+      return `<div class="score-cell"><span class="sk">${k}</span><span class="sv">${n}</span><span class="score-bar"><i style="width:${n}%;background:${col}"></i></span></div>`;
+    }).join("")}</div>` : "";
+    const ssBox = c.scroll_stopper ? `<div class="ss-quote"><b>0–3s Hook</b>“${esc(c.scroll_stopper)}”</div>` : "";
     dlg.innerHTML = `<div class="editor"><div class="stage" id="stage">${stage}</div>
       <div class="panel">
-        <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score : "Clipped by hand"}</span>
+        <div class="job-head" style="margin:0"><div><span class="badge ${scoreCls(c.score)}" style="position:static">${c.judges ? "Words " + c.judges.words + (c.judges.reaction ? " · Reaction " + c.judges.reaction : "") : c.score ? "Score " + c.score + tierLabel : "Clipped by hand"}</span>
           <p class="sub" style="margin-top:8px">${esc(c.reason || "")}</p></div><button class="btn icon ghost" data-act="closedlg" aria-label="Close">${ic("x")}</button></div>
+        ${scoreCells}${ssBox}
         <h3>On the video</h3>
         ${c.shots && c.shots.length > 1 ? `<div style="margin:0 0 10px;padding:6px 10px;background:var(--muted);border-radius:var(--r);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <b style="color:var(--brand-ink)">Shots (${c.shots.length}):</b>

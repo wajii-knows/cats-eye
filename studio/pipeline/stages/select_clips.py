@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
-from studio import brain
+from studio import brain, flags
 from studio.contracts import Moment
 from studio.pipeline.stage import Stage, StageContext, StageError
 
@@ -40,7 +40,7 @@ class SelectClipsStage(Stage):
         uploader = ctx.job.get("uploader") or ctx.job.get("creator") or ""
         max_clips = int(opts.get("max_clips", 6) or 6)
         min_len = int(opts.get("min_len", 15) or 15)
-        max_len = int(opts.get("max_len", 60) or 60)
+        max_len = int(opts.get("max_len", 35) or 35)
 
         import numpy as np
         db_arr = np.array(loudness, dtype=np.float32) if isinstance(loudness, list) else loudness
@@ -59,25 +59,32 @@ class SelectClipsStage(Stage):
         except Exception as e:
             # Fallback to pure loudness if AI fails
             logger.warning("AI clip selection failed, falling back to loudness: %s", e)
-            found = brain.fallback_by_loudness(db_arr, words, max_clips, max_len, duration)
+            found = brain.fallback_by_loudness(db_arr, words, max_clips, max_len, duration, min_len=min_len)
             ai_resp = {}
 
         if not found and duration > 5.0:
             z = brain.loud_zscore(db_arr)
             order = np.argsort(-z)
+            target = min(float(max_len), max(float(min_len), 22.0))
+            lead = min(3.0, target * 0.2)
             for sec in order:
-                s = max(0.0, float(sec) - max_len * 0.5)
-                e = min(duration, s + min(max_len, 20.0))
+                s = round(max(0.0, min(float(sec) - lead, max(0.0, duration - target))), 2)
+                e = round(min(duration, s + target), 2)
                 if any(not (e <= p["start"] or s >= p["end"]) for p in found):
                     continue
+                sc = brain.score_clip(s, e, words, z, min_len=min_len, max_len=max_len)
+                seg_z = z[int(s):int(e) + 1] if len(z) > int(s) else None
                 found.append({
                     "start": s,
                     "end": e,
-                    "score": 50.0,
-                    "hook": "HIGHLIGHT",
-                    "title": "Highlight Moment",
-                    "reason": "Loudest audio peak",
-                    "shots": brain.plan_multishots(s, e),
+                    "score": sc["score"],
+                    "scores": sc["scores"],
+                    "tier": sc["tier"],
+                    "scroll_stopper": sc["scroll_stopper"],
+                    "hook": "HIGH ENERGY MOMENT",
+                    "title": "Peak energy moment",
+                    "reason": f"Picked by peak audio energy (Hook {sc['scores']['hook']}, Payoff {sc['scores']['payoff']}).",
+                    "shots": brain.plan_multishots(s, e, words=words, db_slice=seg_z) if flags.is_on("PEAKCUT_MULTISHOT") else [],
                 })
                 if len(found) >= min(max_clips, 2):
                     break
