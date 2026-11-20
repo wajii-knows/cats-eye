@@ -96,8 +96,8 @@ LAYOUTS = {
 }
 
 
-def resolve_facecam_box(layout: str = "facecam", facecam_box=None) -> tuple:
-    """Return normalized (x, y, w, h) from a detected facecam_box or fallback corner geometry."""
+def resolve_facecam_box(layout: str = "facecam", facecam_box=None):
+    """Return normalized (x, y, w, h) from a detected facecam_box or explicit preset, else None."""
     if isinstance(facecam_box, (list, tuple)) and len(facecam_box) == 4:
         try:
             bx, by, bw, bh = [float(v) for v in facecam_box]
@@ -110,48 +110,17 @@ def resolve_facecam_box(layout: str = "facecam", facecam_box=None) -> tuple:
                 )
         except (TypeError, ValueError):
             pass
-    return FACECAM_CORNERS.get(layout, FACECAM_CORNERS["cam_tl"])
+    if layout in FACECAM_CORNERS:
+        return FACECAM_CORNERS[layout]
+    return None
 
 
-def detect_facecam_from_frames(frames: list) -> tuple:
-    """Automatically detect where the streamer's corner facecam sits across sampled RGB frames.
-    Returns normalized (x, y, w, h). Uses FaceDetector when available, plus zero-CV corner border + skin-cluster vision."""
+def _compute_frame_stats(valid_frames: list) -> dict:
+    """Compute time-averaged grayscale, gradient, and YCbCr skin probability maps for corner PiP detection."""
     import numpy as np
-    valid = [np.asarray(f, dtype=np.uint8) for f in (frames or []) if f is not None and getattr(f, "ndim", 0) == 3 and f.shape[0] >= 36 and f.shape[1] >= 64]
-    if not valid:
-        return FACECAM_CORNERS["cam_tl"]
-
-    # 1. Try registered / OpenCV face detector first if available
-    try:
-        from .pipeline.stages.analyze_snapshots import get_face_detector
-        det = get_face_detector()
-        if det and det.available:
-            corner_faces = []
-            for rgb in valid:
-                for b in (det.detect(rgb) or []):
-                    if isinstance(b, (list, tuple)) and len(b) == 4:
-                        bx, by, bw, bh = [float(v) for v in b]
-                        cx, cy = bx + 0.5 * bw, by + 0.5 * bh
-                        if 0.002 <= bw * bh <= 0.22 and (cx < 0.42 or cx > 0.58) and (cy < 0.45 or cy > 0.55):
-                            corner_faces.append((bx, by, bw, bh, cx, cy))
-            if corner_faces:
-                med_cx = float(np.median([x[4] for x in corner_faces]))
-                med_cy = float(np.median([x[5] for x in corner_faces]))
-                med_bw = float(np.median([x[2] for x in corner_faces]))
-                med_bh = float(np.median([x[3] for x in corner_faces]))
-                cw = round(max(0.24, min(0.34, med_bw * 2.2)), 4)
-                ch = round(max(0.28, min(0.38, med_bh * 2.2)), 4)
-                cx = 0.0 if med_cx < 0.5 else round(1.0 - cw, 4)
-                cy = 0.0 if med_cy < 0.5 else round(1.0 - ch, 4)
-                return (cx, cy, cw, ch)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # 2. Zero-CV corner webcam detector: skin-tone face cluster + persistent L-border + portrait contrast
-    fh, fw = valid[0].shape[:2]
-    grays = []
-    skins = []
-    for rgb in valid:
+    fh, fw = valid_frames[0].shape[:2]
+    grays, skins = [], []
+    for rgb in valid_frames:
         if rgb.shape[:2] != (fh, fw):
             continue
         r = rgb[:, :, 0].astype(np.float32)
@@ -169,43 +138,166 @@ def detect_facecam_from_frames(frames: list) -> tuple:
         )
         grays.append(gray)
         skins.append(skin.astype(np.float32))
-
-    if not grays:
-        return FACECAM_CORNERS["cam_tl"]
-
     mean_gray = np.mean(grays, axis=0)
     mean_skin = np.mean(skins, axis=0)
     gx = np.abs(mean_gray[:, 2:] - mean_gray[:, :-2])
     gy = np.abs(mean_gray[2:, :] - mean_gray[:-2, :])
     global_edge = float(gx.mean() + gy.mean()) * 0.5 + 1e-3
     center_skin = float(mean_skin[int(fh * 0.35):int(fh * 0.65), int(fw * 0.35):int(fw * 0.65)].mean())
+    return {
+        "fh": fh, "fw": fw,
+        "mean_gray": mean_gray, "mean_skin": mean_skin,
+        "gx": gx, "gy": gy, "global_edge": global_edge,
+        "center_skin": center_skin,
+    }
 
-    best_key = "cam_tl"
-    best_box = FACECAM_CORNERS["cam_tl"]
+
+def _corner_border_stats(stats: dict, is_left: bool, is_top: bool) -> tuple:
+    """Measure persistent L-shaped rectangular border strength & coverage in one corner quadrant."""
+    import numpy as np
+    fh, fw = stats["fh"], stats["fw"]
+    gx, gy, global_edge = stats["gx"], stats["gy"], stats["global_edge"]
+    best_rank = -1.0
+    best_min_b, best_min_cov = 0.0, 0.0
+    best_w, best_h = 0.28, (0.32 if is_top else 0.35)
+    for w_cand in (0.24, 0.28, 0.32):
+        for h_cand in (0.28, 0.32, 0.35):
+            vx = int(round((w_cand if is_left else (1.0 - w_cand)) * fw))
+            hy = int(round((h_cand if is_top else (1.0 - h_cand)) * fh))
+            vx_idx = max(1, min(gx.shape[1] - 2, vx - 1))
+            hy_idx = max(1, min(gy.shape[0] - 2, hy - 1))
+            y_sl = slice(0, min(gx.shape[0], hy)) if is_top else slice(max(0, hy), gx.shape[0])
+            x_sl = slice(0, min(gy.shape[1], vx)) if is_left else slice(max(0, vx), gy.shape[1])
+            if y_sl.stop <= y_sl.start or x_sl.stop <= x_sl.start:
+                continue
+            v_strip = gx[y_sl, max(0, vx_idx - 1):min(gx.shape[1], vx_idx + 2)]
+            h_strip = gy[max(0, hy_idx - 1):min(gy.shape[0], hy_idx + 2), x_sl]
+            v_row = np.max(v_strip, axis=1)
+            h_col = np.max(h_strip, axis=0)
+            v_edge = float(np.mean(v_row))
+            h_edge = float(np.mean(h_col))
+            v_cov = float(np.mean(v_row > 1.2 * global_edge))
+            h_cov = float(np.mean(h_col > 1.2 * global_edge))
+            min_b = min(v_edge, h_edge) / global_edge
+            min_cov = min(v_cov, h_cov)
+            rank = 0.6 * min_b + 1.4 * min_cov
+            if rank > best_rank:
+                best_rank = rank
+                best_min_b, best_min_cov = min_b, min_cov
+                best_w, best_h = w_cand, h_cand
+    return best_min_b, best_min_cov, best_w, best_h
+
+
+def analyze_framing_from_frames(frames: list) -> dict:
+    """Analyze sampled frames to determine vertical framing mode without false-cropping empty corners.
+    Returns {'mode': 'facecam'|'speaker_crop'|'wide', 'facecam_box': (x,y,w,h)|None, 'focus_x': float, 'face_count': int}."""
+    import numpy as np
+    valid = [np.asarray(f, dtype=np.uint8) for f in (frames or []) if f is not None and getattr(f, "ndim", 0) == 3 and f.shape[0] >= 36 and f.shape[1] >= 64]
+    if not valid:
+        return {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": 0}
+
+    stats = _compute_frame_stats(valid)
+
+    # 1. Try FaceDetector (OpenCV / registered detector) first
+    det_faces_per_frame = []
+    det_available = False
+    try:
+        from .pipeline.stages.analyze_snapshots import get_face_detector
+        det = get_face_detector()
+        if det and det.available:
+            det_available = True
+            for rgb in valid:
+                det_faces_per_frame.append(list(det.detect(rgb) or []))
+    except Exception:  # noqa: BLE001
+        det_faces_per_frame = []
+
+    if det_available and det_faces_per_frame:
+        quad_obs = {"cam_tl": [], "cam_tr": [], "cam_bl": [], "cam_br": []}
+        main_faces = []
+        for flist in det_faces_per_frame:
+            for b in flist:
+                if not isinstance(b, (list, tuple)) or len(b) != 4:
+                    continue
+                bx, by, bw, bh = [float(v) for v in b]
+                area = bw * bh
+                cx, cy = bx + 0.5 * bw, by + 0.5 * bh
+                q = None
+                if 0.002 <= area <= 0.14:
+                    if cx < 0.36 and cy < 0.42:
+                        q = "cam_tl"
+                    elif cx > 0.64 and cy < 0.42:
+                        q = "cam_tr"
+                    elif cx < 0.36 and cy > 0.58:
+                        q = "cam_bl"
+                    elif cx > 0.64 and cy > 0.58:
+                        q = "cam_br"
+                if q:
+                    quad_obs[q].append((bx, by, bw, bh, cx, cy))
+                else:
+                    main_faces.append((bx, by, bw, bh, cx, cy))
+
+        min_hits = max(1, len(valid) // 2)
+        best_q = None
+        best_q_len = 0
+        for q, obs in quad_obs.items():
+            if len(obs) >= min_hits:
+                cxs, cys = [o[4] for o in obs], [o[5] for o in obs]
+                if float(np.std(cxs)) <= 0.06 and float(np.std(cys)) <= 0.06 and len(obs) > best_q_len:
+                    best_q = q
+                    best_q_len = len(obs)
+
+        if best_q is not None:
+            obs = quad_obs[best_q]
+            fcx = float(np.median([o[4] for o in obs]))
+            fcy = float(np.median([o[5] for o in obs]))
+            fbw = float(np.median([o[2] for o in obs]))
+            fbh = float(np.median([o[3] for o in obs]))
+            is_left = best_q in ("cam_tl", "cam_bl")
+            is_top = best_q in ("cam_tl", "cam_tr")
+            min_b, min_cov, rw, rh = _corner_border_stats(stats, is_left, is_top)
+
+            # Reject wide multi-person bottom-corner faces that have no PiP border when other people sit beside them
+            same_row_mains = [m for m in main_faces if abs(m[5] - fcy) < 0.20]
+            irl_multi = (not is_top) and bool(same_row_mains) and not (min_b >= 1.8 and min_cov >= 0.55)
+            if not irl_multi:
+                rx = 0.0 if is_left else round(1.0 - rw, 4)
+                ry = 0.0 if is_top else round(1.0 - rh, 4)
+                border_encloses = (rx <= fcx <= rx + rw) and (ry <= fcy <= ry + rh)
+                if min_b >= 1.6 and min_cov >= 0.55 and border_encloses:
+                    box = (rx, ry, rw, rh)
+                else:
+                    cw = round(max(0.24, min(0.36, fbw * 2.5)), 4)
+                    ch = round(max(0.26, min(0.38, fbh * 2.3)), 4)
+                    cx = round(max(0.0, min(1.0 - cw, fcx - 0.5 * cw)), 4)
+                    cy = round(max(0.0, min(1.0 - ch, fcy - 0.5 * ch)), 4)
+                    box = (cx, cy, cw, ch)
+                return {"mode": "facecam", "facecam_box": box, "focus_x": 0.5, "face_count": 1}
+
+        non_empty = [f for f in det_faces_per_frame if f]
+        if non_empty:
+            med_faces = int(round(float(np.median([len(f) for f in non_empty]))))
+            if med_faces == 1:
+                focus_x = round(float(np.median([f[0][0] + 0.5 * f[0][2] for f in non_empty])), 4)
+                return {"mode": "speaker_crop", "facecam_box": None, "focus_x": focus_x, "face_count": 1}
+            if med_faces >= 2:
+                return {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": med_faces}
+
+    # 2. Strict Zero-CV corner webcam detector (requires BOTH continuous L-border AND inner skin face + brightness)
+    fh, fw = stats["fh"], stats["fw"]
+    mean_gray, mean_skin = stats["mean_gray"], stats["mean_skin"]
+    center_skin = stats["center_skin"]
+
+    best_box = None
     best_score = -1e9
-
-    for key, (cx0, cy0, cw0, ch0) in FACECAM_CORNERS.items():
+    for key, (cx0, cy0, _cw0, _ch0) in FACECAM_CORNERS.items():
         is_left = cx0 < 0.5
         is_top = cy0 < 0.5
+        min_b, min_cov, refined_w, refined_h = _corner_border_stats(stats, is_left, is_top)
 
-        # Scan candidate box dimensions around standard corner preset to lock onto persistent webcam frame borders
-        best_b_score = 0.0
-        refined_w, refined_h = cw0, ch0
-        for w_cand in (0.24, 0.28, 0.32):
-            for h_cand in (0.28, 0.32, 0.35):
-                vx = int(round((w_cand if is_left else (1.0 - w_cand)) * fw))
-                hy = int(round((h_cand if is_top else (1.0 - h_cand)) * fh))
-                vx_idx = max(1, min(gx.shape[1] - 2, vx - 1))
-                hy_idx = max(1, min(gy.shape[0] - 2, hy - 1))
-                y_sl = slice(0, min(gx.shape[0], hy)) if is_top else slice(max(0, hy), gx.shape[0])
-                x_sl = slice(0, min(gy.shape[1], vx)) if is_left else slice(max(0, vx), gy.shape[1])
-                v_edge = float(gx[y_sl, max(0, vx_idx - 1):min(gx.shape[1], vx_idx + 2)].mean()) if y_sl.stop > y_sl.start else 0.0
-                h_edge = float(gy[max(0, hy_idx - 1):min(gy.shape[0], hy_idx + 2), x_sl].mean()) if x_sl.stop > x_sl.start else 0.0
-                b_sc = (v_edge + h_edge) / (2.0 * global_edge)
-                if b_sc > best_b_score:
-                    best_b_score = b_sc
-                    if b_sc >= 1.45:
-                        refined_w, refined_h = w_cand, h_cand
+        b_thresh = 1.5 if is_top else 2.0
+        cov_thresh = 0.55 if is_top else 0.70
+        if min_b < b_thresh or min_cov < cov_thresh:
+            continue
 
         rx = 0.0 if is_left else round(1.0 - refined_w, 4)
         ry = 0.0 if is_top else round(1.0 - refined_h, 4)
@@ -213,31 +305,42 @@ def detect_facecam_from_frames(frames: list) -> tuple:
         y0, y1 = int(round(ry * fh)), int(round((ry + refined_h) * fh))
         pw, ph = max(4, x1 - x0), max(4, y1 - y0)
 
+        patch_gray = mean_gray[y0:y1, x0:x1]
+        inner_gray = patch_gray[int(ph * 0.18):int(ph * 0.85), int(pw * 0.20):int(pw * 0.80)]
+        if not inner_gray.size or float(inner_gray.mean()) < 30.0 or float(inner_gray.std()) < 10.0:
+            continue
+
         patch_skin = mean_skin[y0:y1, x0:x1]
         inner_skin_patch = patch_skin[int(ph * 0.18):int(ph * 0.85), int(pw * 0.20):int(pw * 0.80)]
         inner_skin = float(inner_skin_patch.mean()) if inner_skin_patch.size else 0.0
         outer_skin = max(0.0, (float(patch_skin.mean()) * patch_skin.size - inner_skin * inner_skin_patch.size) / max(1, patch_skin.size - inner_skin_patch.size))
         skin_signal = max(0.0, inner_skin - 0.5 * center_skin) + max(0.0, inner_skin - outer_skin)
+        if inner_skin < 0.08 or inner_skin <= outer_skin * 1.1 or skin_signal < 0.06:
+            continue
 
-        patch_gray = mean_gray[y0:y1, x0:x1]
-        inner_gray = patch_gray[int(ph * 0.18):int(ph * 0.85), int(pw * 0.20):int(pw * 0.80)]
-        portrait_signal = min(1.0, float(inner_gray.std()) / 32.0) if inner_gray.size else 0.0
-
-        total_score = 3.2 * skin_signal + 1.1 * min(3.0, best_b_score) + 0.4 * portrait_signal
+        portrait_signal = min(1.0, float(inner_gray.std()) / 32.0)
+        total_score = 3.2 * skin_signal + 1.1 * min(3.0, min_b) + 0.4 * portrait_signal
         if total_score > best_score:
             best_score = total_score
-            best_key = key
             best_box = (rx, ry, refined_w, refined_h)
 
-    return best_box
+    if best_box is not None:
+        return {"mode": "facecam", "facecam_box": best_box, "focus_x": 0.5, "face_count": 1}
+
+    return {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": 0}
 
 
-def auto_detect_facecam(src: Path, start: float = 0.0, end: float = 0.0) -> tuple:
-    """Sample up to 3 lightweight thumbnails from src across [start, end] and detect the streamer's facecam box."""
+def detect_facecam_from_frames(frames: list):
+    """Return normalized (x, y, w, h) corner PiP facecam box from sampled RGB frames, or None if no corner facecam exists."""
+    return analyze_framing_from_frames(frames).get("facecam_box")
+
+
+def analyze_clip_framing(src: Path, start: float = 0.0, end: float = 0.0) -> dict:
+    """Sample up to 4 640x360 frames across [start, end] and determine clip framing ('facecam', 'speaker_crop', or 'wide')."""
     import numpy as np
     from PIL import Image
     dur = max(0.5, float(end) - float(start))
-    offsets = [start + dur * frac for frac in ((0.2, 0.5, 0.8) if dur >= 3.0 else (0.5,))]
+    offsets = [start + dur * frac for frac in ((0.15, 0.38, 0.62, 0.85) if dur >= 3.0 else (0.5,))]
     frames = []
     tmp_dir = Path(tempfile.mkdtemp(prefix="fc_det_"))
     try:
@@ -245,7 +348,7 @@ def auto_detect_facecam(src: Path, start: float = 0.0, end: float = 0.0) -> tupl
             out_jpg = tmp_dir / f"f{idx}.jpg"
             p = subprocess.run(
                 ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, ts):.2f}", "-i", str(src),
-                 "-frames:v", "1", "-vf", "scale=320:180", "-q:v", "5", str(out_jpg)],
+                 "-frames:v", "1", "-vf", "scale=640:360", "-q:v", "4", str(out_jpg)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 creationflags=NO_WINDOW, timeout=15,
             )
@@ -256,7 +359,12 @@ def auto_detect_facecam(src: Path, start: float = 0.0, end: float = 0.0) -> tupl
         pass
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-    return detect_facecam_from_frames(frames)
+    return analyze_framing_from_frames(frames)
+
+
+def auto_detect_facecam(src: Path, start: float = 0.0, end: float = 0.0):
+    """Return detected corner PiP facecam box (x, y, w, h) for [start, end], or None."""
+    return analyze_clip_framing(src, start, end).get("facecam_box")
 
 
 def _ts(t):
@@ -426,11 +534,28 @@ def _facecam_stack_chain(in_pad: str, out_pad: str, tag: str, cam_box: tuple) ->
     )
 
 
-def _filter(layout, fg_h, facecam_box=None):
+def _filter_speaker_crop(focus_x: float = 0.5, src_w: int = 1920, src_h: int = 1080) -> str:
+    """Comma-free 9:16 crop filter centered horizontally on normalized focus_x (0..1)."""
+    sw = max(1, int(src_w or 1920))
+    sh = max(1, int(src_h or 1080))
+    crop_w_frac = min(1.0, (sh * (W / float(H))) / float(sw))
+    if crop_w_frac >= 0.99:
+        return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1"
+    fx = max(0.0, min(1.0, float(focus_x)))
+    crop_x_frac = max(0.0, min(1.0 - crop_w_frac, fx - crop_w_frac * 0.5))
+    return f"crop=iw*{crop_w_frac:.4f}:ih:iw*{crop_x_frac:.4f}:0,scale={W}:{H},{COLOR_PUNCH},setsar=1"
+
+
+def _filter(layout, fg_h, facecam_box=None, focus_x: float = 0.5, src_w: int = 1920, src_h: int = 1080):
     if layout in FACECAM_LAYOUTS:
         cam_box = resolve_facecam_box(layout, facecam_box)
-        return f"[0:v]fps={config.OUT_FPS}[v_fps];" + _facecam_stack_chain("[v_fps]", "[v0]", "main", cam_box)
+        if cam_box is not None:
+            return f"[0:v]fps={config.OUT_FPS}[v_fps];" + _facecam_stack_chain("[v_fps]", "[v0]", "main", cam_box)
+        # Never crop a bogus corner when no PiP facecam exists; keep full wide frame + blurred fill
+        layout = "blur"
     if layout == "crop":
+        if abs(float(focus_x) - 0.5) > 0.02:
+            return f"[0:v]fps={config.OUT_FPS}," + _filter_speaker_crop(focus_x, src_w, src_h) + "[v0];"
         return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v0];"
     return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
@@ -439,7 +564,7 @@ def _filter(layout, fg_h, facecam_box=None):
             f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v0];")
 
 
-def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="multishot"):
+def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="multishot", focus_x: float = 0.5):
     """FFmpeg filter graph to switch camera shots / framings dynamically across the clip."""
     dur = max(0.5, float(dur))
     cam_box = resolve_facecam_box(layout, facecam_box)
@@ -458,7 +583,7 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
     if not clean:
         count = max(2, min(8, int(round(dur / 4.0))))
         step = dur / count
-        pats = ["split", "close", "zoom", "split", "crop", "wide"]
+        pats = ["split", "close", "zoom", "split", "crop", "wide"] if cam_box else ["wide", "zoom", "close", "crop", "wide"]
         for i in range(count):
             clean.append({"start": i * step, "end": min(dur, (i + 1) * step), "type": pats[i % len(pats)]})
 
@@ -477,17 +602,17 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
     if clean:
         clean[-1] = {**clean[-1], "end": dur}
     if not clean:
-        return _filter("blur", fg_h, facecam_box=facecam_box)
+        return _filter("blur", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
 
     if len(clean) == 1:
         st = clean[0]["type"]
-        if st == "split":
-            return _filter("cam_tl", fg_h, facecam_box=cam_box)
+        if st == "split" and cam_box is not None:
+            return _filter("facecam", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
         if st == "crop":
-            return _filter("crop", fg_h, facecam_box=facecam_box)
-        if st == "zoom":
-            return _filter("zoom", 1000, facecam_box=facecam_box)
-        return _filter("blur", fg_h, facecam_box=facecam_box)
+            return _filter("crop", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
+        if st == "zoom" or (st == "split" and cam_box is None):
+            return _filter("zoom", 1000, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
+        return _filter("blur", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
 
     N = len(clean)
     fc = [f"[0:v]fps={config.OUT_FPS},split={N}" + "".join(f"[in{i}]" for i in range(N)) + ";"]
@@ -504,20 +629,28 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
             else:
                 fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
         else:
-            if stype == "crop":
-                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
-            elif stype == "close":
+            eff_type = "zoom" if (stype == "split" and cam_box is None) else stype
+            if eff_type == "crop":
+                if abs(float(focus_x) - 0.5) > 0.02:
+                    fc.append(f"{trim}," + _filter_speaker_crop(focus_x, src_w, src_h) + f"[v{i}_p];")
+                else:
+                    fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
+            elif eff_type == "close" and cam_box is not None:
+                cx, cy, cw, ch = cam_box
+                fc.append(f"{trim},crop=iw*{cw:.4f}:ih*{ch:.4f}:iw*{cx:.4f}:ih*{cy:.4f},"
+                          f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
+            elif eff_type == "close":
                 ch = min(H, int(round(fg_h * 1.36 / 2)) * 2)
                 fc.append(f"{trim},split=2[cb{i}][cf{i}];"
                           f"[cb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[cbg{i}];"
                           f"[cf{i}]scale={int(W*1.36/2)*2}:{ch}:force_original_aspect_ratio=increase,crop={W}:{ch},{COLOR_PUNCH}[cfg{i}];"
                           f"[cbg{i}][cfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
-            elif stype == "zoom":
+            elif eff_type == "zoom":
                 fc.append(f"{trim},split=2[zb{i}][zf{i}];"
                           f"[zb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[zbg{i}];"
                           f"[zf{i}]scale={W}:1000:force_original_aspect_ratio=increase,crop={W}:1000,{COLOR_PUNCH}[zfg{i}];"
                           f"[zbg{i}][zfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
-            elif stype == "split":
+            elif eff_type == "split":
                 fc.append(f"{trim}[tr_{i}];" + _facecam_stack_chain(f"[tr_{i}]", f"[v{i}_p]", f"s{i}", cam_box))
             else:  # wide / blur
                 fc.append(f"{trim},split=2[wb{i}][wf{i}];"
@@ -538,28 +671,47 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
-    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
+    req_layout = clip.get("layout", "blur")
+    shots = clip.get("shots") or []
+
+    framing = {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": 0}
+    explicit_box = resolve_facecam_box(req_layout, clip.get("facecam_box"))
+    if clip.get("facecam_box") and explicit_box is not None:
+        framing = {"mode": "facecam", "facecam_box": explicit_box, "focus_x": 0.5, "face_count": 1}
+    elif req_layout == "facecam" or req_layout == "multishot":
+        framing = analyze_clip_framing(src, start, end)
+        if framing.get("facecam_box") is not None:
+            clip["facecam_box"] = list(framing["facecam_box"])
+
+    effective_layout = req_layout
+    if req_layout == "facecam":
+        if framing["mode"] == "facecam" and framing["facecam_box"] is not None:
+            effective_layout = "facecam"
+        elif framing["mode"] == "speaker_crop":
+            effective_layout = "crop"
+        else:
+            effective_layout = "blur"
+
+    _, fg_h, hook_y, cap_y = geometry(src_w, src_h, effective_layout)
     ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
                     clip.get("highlight_words", []), hook_y, cap_y)
-    shots = clip.get("shots") or []
-    facecam_box = clip.get("facecam_box")
-    if not facecam_box and (layout in FACECAM_LAYOUTS or (layout == "multishot" and any(isinstance(s, dict) and s.get("type") == "split" for s in shots))):
-        facecam_box = auto_detect_facecam(src, start, end)
-        clip["facecam_box"] = list(facecam_box)
-    # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
-    # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
-    # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
-    # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, shots=shots,
-                          src_w=src_w, src_h=src_h, facecam_box=facecam_box)
+        res = _render_in(
+            work, src, out_dir, name, start, end, effective_layout, fg_h, ass,
+            shots=shots, src_w=src_w, src_h=src_h,
+            facecam_box=framing.get("facecam_box") or explicit_box,
+            focus_x=framing.get("focus_x", 0.5),
+            req_layout=req_layout, framing_mode=framing["mode"],
+        )
+        return res
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
-               shots: list = None, src_w: int = 0, src_h: int = 0, facecam_box=None) -> dict:
+               shots: list = None, src_w: int = 0, src_h: int = 0, facecam_box=None,
+               focus_x: float = 0.5, req_layout: str = "", framing_mode: str = "") -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
@@ -573,9 +725,9 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
                 rel_shots.append({"start": float(s.get("start", start)) - start,
                                   "end": float(s.get("end", end)) - start,
                                   "type": s.get("type", "wide")})
-        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h, facecam_box=facecam_box, layout=layout) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h, facecam_box=facecam_box, layout=layout, focus_x=focus_x) + f"[v0]ass={name}.ass:fontsdir=f[v]"
     else:
-        fc = _filter(layout, fg_h, facecam_box=facecam_box) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        fc = _filter(layout, fg_h, facecam_box=facecam_box, focus_x=focus_x, src_w=src_w or 1920, src_h=src_h or 1080) + f"[v0]ass={name}.ass:fontsdir=f[v]"
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
@@ -601,4 +753,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):
         shutil.move(str(work / f"{name}.{ext}"), str(out_dir / f"{name}.{ext}"))
-    return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout}
+    out = {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": req_layout or layout}
+    if framing_mode:
+        out["framing"] = framing_mode
+    return out

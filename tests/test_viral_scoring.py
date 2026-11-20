@@ -293,12 +293,72 @@ det_bl = render.detect_facecam_from_frames([_make_streamer_frame("cam_bl"), _mak
 det_br = render.detect_facecam_from_frames([_make_streamer_frame("cam_br"), _make_streamer_frame("cam_br")])
 check(
     "5.1 detect_facecam_from_frames automatically identifies facecam in all 4 corners (TL, TR, BL, BR)",
-    det_tl[0] < 0.1 and det_tl[1] < 0.1
+    det_tl is not None and det_tr is not None and det_bl is not None and det_br is not None
+    and det_tl[0] < 0.1 and det_tl[1] < 0.1
     and det_tr[0] > 0.6 and det_tr[1] < 0.1
     and det_bl[0] < 0.1 and det_bl[1] > 0.55
     and det_br[0] > 0.6 and det_br[1] > 0.55,
     f"tl={det_tl}, tr={det_tr}, bl={det_bl}, br={det_br}",
 )
+
+# Negative rejection: dark room + doorframe + 3 wide seated people (no PiP corner facecam)
+studio_dark = np.zeros((180, 320, 3), dtype=np.uint8)
+studio_dark[:, :] = (16, 18, 28)  # dark room backdrop
+studio_dark[0:58, 224:227] = (180, 120, 140)  # vertical doorway trim near x=0.70
+studio_dark[56:59, 224:320] = (140, 100, 120)  # horizontal beam near y=0.32
+# 3 seated speakers across bottom half
+for sx in (38, 152, 272):
+    studio_dark[105:138, sx - 14:sx + 14] = (212, 152, 122)
+
+det_dark = render.detect_facecam_from_frames([studio_dark, studio_dark])
+fr_dark = render.analyze_framing_from_frames([studio_dark, studio_dark])
+check(
+    "5.1 dark room corner / doorframe with no PiP facecam is rejected (returns None & wide mode)",
+    det_dark is None and fr_dark["mode"] == "wide",
+    f"det_dark={det_dark}, fr_dark={fr_dark}",
+)
+
+# Mock FaceDetector cases: 3-person wide studio, 1 solo speaker, and borderless green-screen corner cam
+from studio.pipeline.stages import analyze_snapshots as _asnap  # noqa: E402
+
+
+class _MockDet(_asnap.FaceDetector):
+    available = True
+    name = "mock"
+
+    def __init__(self, boxes):
+        self._boxes = boxes
+
+    def detect(self, rgb):
+        return self._boxes
+
+
+try:
+    _asnap.register_face_detector(_MockDet([[0.05, 0.65, 0.12, 0.18], [0.42, 0.63, 0.12, 0.18], [0.82, 0.65, 0.12, 0.18]]))
+    fr_3p = render.analyze_framing_from_frames([studio_dark, studio_dark])
+    check(
+        "5.1 3-person wide studio shot (like clip02) routes to wide mode, NOT bogus corner facecam",
+        fr_3p["mode"] == "wide" and fr_3p["facecam_box"] is None and fr_3p["face_count"] >= 2,
+        str(fr_3p),
+    )
+
+    _asnap.register_face_detector(_MockDet([[0.42, 0.25, 0.16, 0.28]]))
+    fr_1p = render.analyze_framing_from_frames([studio_dark, studio_dark])
+    check(
+        "5.1 single full-frame speaker routes to speaker_crop centered on speaker",
+        fr_1p["mode"] == "speaker_crop" and fr_1p["facecam_box"] is None and 0.45 <= fr_1p["focus_x"] <= 0.55,
+        str(fr_1p),
+    )
+
+    _asnap.register_face_detector(_MockDet([[0.78, 0.08, 0.10, 0.16]]))
+    fr_gs = render.analyze_framing_from_frames([studio_dark, studio_dark])
+    check(
+        "5.1 borderless/green-screen corner facecam detects face and places cam box around top-right face",
+        fr_gs["mode"] == "facecam" and fr_gs["facecam_box"] is not None and fr_gs["facecam_box"][0] > 0.60 and fr_gs["facecam_box"][1] < 0.15,
+        str(fr_gs),
+    )
+finally:
+    _asnap.register_face_detector(None)
 
 lay_fc, fg_fc, hook_y_fc, cap_y_fc = render.geometry(1920, 1080, "facecam")
 flt_left = render._filter("facecam", fg_fc, facecam_box=det_tl)
@@ -323,6 +383,28 @@ check(
     render.COLOR_PUNCH in flt_left and "Parasocial Story Hook" in brain.RULES,
     flt_left,
 )
+
+# End-to-end FFmpeg render fallback test: dark video with no facecam rendered with layout='facecam' falls back cleanly to 'wide'
+import subprocess  # noqa: E402
+from studio import config as _cfg  # noqa: E402
+_cfg.FONTS_DIR.mkdir(parents=True, exist_ok=True)
+render.install_fonts()
+tmp_e2e = Path(tempfile.mkdtemp(prefix="pc-fc-e2e-"))
+try:
+    dark_src = tmp_e2e / "dark.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=0x10121C:size=640x360:duration=2:rate=24",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-c:a", "aac", str(dark_src)],
+        check=True,
+    )
+    e2e_res = render.render_clip(dark_src, tmp_e2e / "out", "fc_test", {"start": 0.0, "end": 2.0, "layout": "facecam", "hook": "TEST"}, [{"w": "hello", "s": 0.2, "e": 0.8}], 640, 360)
+    check(
+        "5.1 FFmpeg render_clip with layout='facecam' on non-facecam video falls back cleanly to wide framing",
+        e2e_res.get("framing") == "wide" and (tmp_e2e / "out" / "fc_test.mp4").is_file() and (tmp_e2e / "out" / "fc_test.mp4").stat().st_size > 5000,
+        str(e2e_res),
+    )
+finally:
+    shutil.rmtree(tmp_e2e, ignore_errors=True)
 
 print("ALL PASSED" if not fails else f"{len(fails)} failed")
 shutil.rmtree(os.environ["PEAKCUT_DATA"], ignore_errors=True)

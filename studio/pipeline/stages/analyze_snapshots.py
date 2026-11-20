@@ -55,21 +55,34 @@ class NullFaceDetector(FaceDetector):
 
 
 class OpenCVHaarFaceDetector(FaceDetector):
-    """Optional Apache-2.0 Haar cascade detector used only when OpenCV is already installed."""
+    """Optional Apache-2.0 Haar cascade detector (frontal + alt2 + profile) used only when OpenCV is installed."""
 
     name = "opencv_haar"
 
     def __init__(self) -> None:
         self._cascade = None
+        self._alt2 = None
+        self._profile = None
         self.available = False
         try:
             import cv2  # type: ignore
-            xml = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+            casc_dir = Path(cv2.data.haarcascades)
+            xml = casc_dir / "haarcascade_frontalface_default.xml"
             if xml.is_file():
                 clf = cv2.CascadeClassifier(str(xml))
                 if not clf.empty():
                     self._cascade = (cv2, clf)
                     self.available = True
+            alt2_xml = casc_dir / "haarcascade_frontalface_alt2.xml"
+            if alt2_xml.is_file():
+                alt2_clf = cv2.CascadeClassifier(str(alt2_xml))
+                if not alt2_clf.empty():
+                    self._alt2 = alt2_clf
+            prof_xml = casc_dir / "haarcascade_profileface.xml"
+            if prof_xml.is_file():
+                prof_clf = cv2.CascadeClassifier(str(prof_xml))
+                if not prof_clf.empty():
+                    self._profile = prof_clf
         except Exception:
             self._cascade = None
             self.available = False
@@ -82,17 +95,51 @@ class OpenCVHaarFaceDetector(FaceDetector):
         if h < 16 or w < 16:
             return []
         gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY)
-        rects = clf.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=4, minSize=(20, 20))
-        boxes: List[List[float]] = []
-        for x, y, bw, bh in rects:
-            boxes.append([
-                round(max(0.0, min(1.0, float(x) / w)), 4),
-                round(max(0.0, min(1.0, float(y) / h)), 4),
-                round(max(0.0, min(1.0, float(bw) / w)), 4),
-                round(max(0.0, min(1.0, float(bh) / h)), 4),
-            ])
-        boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
-        return boxes
+        eq = cv2.equalizeHist(gray)
+        min_sz = max(18, min(h, w) // 24)
+
+        raw_cands: List[Tuple[int, float, float, float, float]] = []
+        for x, y, bw, bh in clf.detectMultiScale(eq, scaleFactor=1.12, minNeighbors=4, minSize=(min_sz, min_sz)):
+            raw_cands.append((2, float(x) / w, float(y) / h, float(bw) / w, float(bh) / h))
+
+        if self._alt2 is not None and not raw_cands:
+            for x, y, bw, bh in self._alt2.detectMultiScale(eq, scaleFactor=1.12, minNeighbors=4, minSize=(min_sz, min_sz)):
+                raw_cands.append((2, float(x) / w, float(y) / h, float(bw) / w, float(bh) / h))
+
+        if self._profile is not None and len(raw_cands) < 2:
+            for x, y, bw, bh in self._profile.detectMultiScale(eq, scaleFactor=1.15, minNeighbors=4, minSize=(min_sz, min_sz)):
+                raw_cands.append((1, float(x) / w, float(y) / h, float(bw) / w, float(bh) / h))
+            eq_flip = cv2.flip(eq, 1)
+            for x, y, bw, bh in self._profile.detectMultiScale(eq_flip, scaleFactor=1.15, minNeighbors=4, minSize=(min_sz, min_sz)):
+                fx = max(0, w - int(x) - int(bw))
+                raw_cands.append((1, float(fx) / w, float(y) / h, float(bw) / w, float(bh) / h))
+
+        # Deduplicate overlapping frontal / profile detections via IoU NMS
+        raw_cands.sort(key=lambda item: (item[0], item[3] * item[4]), reverse=True)
+        kept: List[List[float]] = []
+        for _, bx, by, bw, bh in raw_cands:
+            bx0 = round(max(0.0, min(1.0, bx)), 4)
+            by0 = round(max(0.0, min(1.0, by)), 4)
+            bw0 = round(max(0.0, min(1.0 - bx0, bw)), 4)
+            bh0 = round(max(0.0, min(1.0 - by0, bh)), 4)
+            if bw0 <= 0.0 or bh0 <= 0.0:
+                continue
+            dup = False
+            for kx, ky, kw, kh in kept:
+                ix0, iy0 = max(bx0, kx), max(by0, ky)
+                ix1, iy1 = min(bx0 + bw0, kx + kw), min(by0 + bh0, ky + kh)
+                inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+                if inter <= 0.0:
+                    continue
+                area_a, area_b = bw0 * bh0, kw * kh
+                iou = inter / max(1e-6, area_a + area_b - inter)
+                if iou > 0.35 or inter / max(1e-6, min(area_a, area_b)) > 0.60:
+                    dup = True
+                    break
+            if not dup:
+                kept.append([bx0, by0, bw0, bh0])
+        kept.sort(key=lambda b: b[2] * b[3], reverse=True)
+        return kept
 
 
 class LayoutClassifier(ABC):
