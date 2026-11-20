@@ -78,12 +78,42 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
+FACECAM_CORNERS = {
+    "cam_tl": (0.0, 0.0, 0.28, 0.32),    # Top-Left (Techno Gamerz, xQc)
+    "cam_tr": (0.72, 0.0, 0.28, 0.32),   # Top-Right (IShowSpeed, Kai Cenat)
+    "cam_bl": (0.0, 0.65, 0.28, 0.35),   # Bottom-Left
+    "cam_br": (0.72, 0.65, 0.28, 0.35),  # Bottom-Right
+}
+FACECAM_LAYOUTS = ("cam_tl", "cam_tr", "cam_bl", "cam_br", "facecam")
+COLOR_PUNCH = "eq=brightness=-0.02:contrast=1.06:saturation=1.18"
+
 LAYOUTS = {
     "multishot": "Multishot (dynamic cuts)",
+    "cam_tl": "Streamer Cam (Top-Left + Gameplay)",
+    "cam_tr": "Streamer Cam (Top-Right + Gameplay)",
+    "cam_bl": "Streamer Cam (Bottom-Left + Gameplay)",
+    "cam_br": "Streamer Cam (Bottom-Right + Gameplay)",
     "blur": "Full frame + blurred fill",
     "zoom": "Zoomed in + blurred fill",
     "crop": "Fill the screen (centre crop)",
 }
+
+
+def resolve_facecam_box(layout: str, facecam_box=None) -> tuple:
+    """Return normalized (x, y, w, h) for a corner facecam preset or an auto-detected facecam_box."""
+    if isinstance(facecam_box, (list, tuple)) and len(facecam_box) == 4:
+        try:
+            bx, by, bw, bh = [float(v) for v in facecam_box]
+            if 0.0 <= bx < 1.0 and 0.0 <= by < 1.0 and 0.05 <= bw <= 0.65 and 0.05 <= bh <= 0.65:
+                return (
+                    round(max(0.0, min(1.0 - bw, bx)), 4),
+                    round(max(0.0, min(1.0 - bh, by)), 4),
+                    round(bw, 4),
+                    round(bh, 4),
+                )
+        except (TypeError, ValueError):
+            pass
+    return FACECAM_CORNERS.get(layout, FACECAM_CORNERS["cam_tl"])
 
 
 def _ts(t):
@@ -113,8 +143,11 @@ def _groups(words, per):
 
 def geometry(src_w, src_h, layout):
     """Where the video sits in the 1080x1920 frame, and where hook and captions go."""
-    if src_h >= src_w and layout not in ("crop", "multishot"):
+    if src_h >= src_w and layout not in ("crop", "multishot") and layout not in FACECAM_LAYOUTS:
         layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
+    if layout in FACECAM_LAYOUTS:
+        top_h = int(round(H * 0.38 / 2)) * 2  # Top 38% (730px) facecam + Bottom 62% (1190px) gameplay
+        return layout, top_h, top_h, 1420
     if layout in ("blur", "multishot"):
         fg_h = min(H, int(round(W * src_h / src_w / 2)) * 2) if (src_w and src_h) else int(W * 9 / 16)
     elif layout == "zoom":
@@ -230,19 +263,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(ev) + "\n"
 
 
-def _filter(layout, fg_h):
+def _facecam_stack_chain(in_pad: str, out_pad: str, tag: str, cam_box: tuple) -> str:
+    """Crops corner facecam into Top 38% (1080x730) and clean center gameplay (x=0.22..0.78) into Bottom 62% (1080x1190)."""
+    cx, cy, cw, ch = cam_box
+    top_h = int(round(H * 0.38 / 2)) * 2   # 730
+    bot_h = H - top_h                      # 1190
+    return (
+        f"{in_pad}split=2[fc_t_{tag}][fc_b_{tag}];"
+        f"[fc_t_{tag}]crop=iw*{cw:.4f}:ih*{ch:.4f}:iw*{cx:.4f}:ih*{cy:.4f},"
+        f"scale={W}:{top_h}:force_original_aspect_ratio=increase,crop={W}:{top_h},setsar=1[top_{tag}];"
+        f"[fc_b_{tag}]crop=iw*0.5600:ih:iw*0.2200:0,"
+        f"scale={W}:{bot_h}:force_original_aspect_ratio=increase,crop={W}:{bot_h},setsar=1[bot_{tag}];"
+        f"[top_{tag}][bot_{tag}]vstack,{COLOR_PUNCH},setsar=1{out_pad};"
+    )
+
+
+def _filter(layout, fg_h, facecam_box=None):
+    if layout in FACECAM_LAYOUTS:
+        cam_box = resolve_facecam_box(layout, facecam_box)
+        return f"[0:v]fps={config.OUT_FPS}[v_fps];" + _facecam_stack_chain("[v_fps]", "[v0]", "main", cam_box)
     if layout == "crop":
-        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
+        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v0];"
     return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
             f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
-            f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
+            f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h},{COLOR_PUNCH}[fg];"
             f"[bg][fg]overlay=0:(H-h)/2,setsar=1[v0];")
 
 
-def _multishot_filter(shots, fg_h, dur, src_w, src_h):
+def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="multishot"):
     """FFmpeg filter graph to switch camera shots / framings dynamically across the clip."""
     dur = max(0.5, float(dur))
+    cam_box = resolve_facecam_box(layout, facecam_box)
     clean = []
     if shots and isinstance(shots, list):
         for s in shots:
@@ -258,7 +310,7 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h):
     if not clean:
         count = max(2, min(8, int(round(dur / 4.0))))
         step = dur / count
-        pats = ["wide", "close", "zoom", "close", "crop", "wide"]
+        pats = ["split", "close", "zoom", "split", "crop", "wide"]
         for i in range(count):
             clean.append({"start": i * step, "end": min(dur, (i + 1) * step), "type": pats[i % len(pats)]})
 
@@ -277,15 +329,17 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h):
     if clean:
         clean[-1] = {**clean[-1], "end": dur}
     if not clean:
-        return _filter("blur", fg_h)
+        return _filter("blur", fg_h, facecam_box=facecam_box)
 
     if len(clean) == 1:
         st = clean[0]["type"]
+        if st == "split":
+            return _filter("cam_tl", fg_h, facecam_box=cam_box)
         if st == "crop":
-            return _filter("crop", fg_h)
+            return _filter("crop", fg_h, facecam_box=facecam_box)
         if st == "zoom":
-            return _filter("zoom", 1000)
-        return _filter("blur", fg_h)
+            return _filter("zoom", 1000, facecam_box=facecam_box)
+        return _filter("blur", fg_h, facecam_box=facecam_box)
 
     N = len(clean)
     fc = [f"[0:v]fps={config.OUT_FPS},split={N}" + "".join(f"[in{i}]" for i in range(N)) + ";"]
@@ -296,35 +350,31 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h):
         trim = f"[in{i}]trim=start={t0:.2f}:end={t1:.2f},setpts=PTS-STARTPTS"
         if is_vert:
             if stype == "close":
-                fc.append(f"{trim},scale={int(W*1.3/2)*2}:{int(H*1.3/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+                fc.append(f"{trim},scale={int(W*1.3/2)*2}:{int(H*1.3/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
             elif stype == "zoom":
-                fc.append(f"{trim},scale={int(W*1.15/2)*2}:{int(H*1.15/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+                fc.append(f"{trim},scale={int(W*1.15/2)*2}:{int(H*1.15/2)*2}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
             else:
-                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
         else:
             if stype == "crop":
-                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v{i}_p];")
+                fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
             elif stype == "close":
                 ch = min(H, int(round(fg_h * 1.36 / 2)) * 2)
                 fc.append(f"{trim},split=2[cb{i}][cf{i}];"
                           f"[cb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[cbg{i}];"
-                          f"[cf{i}]scale={int(W*1.36/2)*2}:{ch}:force_original_aspect_ratio=increase,crop={W}:{ch}[cfg{i}];"
+                          f"[cf{i}]scale={int(W*1.36/2)*2}:{ch}:force_original_aspect_ratio=increase,crop={W}:{ch},{COLOR_PUNCH}[cfg{i}];"
                           f"[cbg{i}][cfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
             elif stype == "zoom":
                 fc.append(f"{trim},split=2[zb{i}][zf{i}];"
                           f"[zb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[zbg{i}];"
-                          f"[zf{i}]scale={W}:1000:force_original_aspect_ratio=increase,crop={W}:1000[zfg{i}];"
+                          f"[zf{i}]scale={W}:1000:force_original_aspect_ratio=increase,crop={W}:1000,{COLOR_PUNCH}[zfg{i}];"
                           f"[zbg{i}][zfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
             elif stype == "split":
-                half_h = H // 2
-                fc.append(f"{trim},split=2[spt{i}][spb{i}];"
-                          f"[spt{i}]scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[spt_t{i}];"
-                          f"[spb{i}]scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[spb_b{i}];"
-                          f"[spt_t{i}][spb_b{i}]vstack,setsar=1[v{i}_p];")
+                fc.append(f"{trim}[tr_{i}];" + _facecam_stack_chain(f"[tr_{i}]", f"[v{i}_p]", f"s{i}", cam_box))
             else:  # wide / blur
                 fc.append(f"{trim},split=2[wb{i}][wf{i}];"
                           f"[wb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[wbg{i}];"
-                          f"[wf{i}]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[wfg{i}];"
+                          f"[wf{i}]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h},{COLOR_PUNCH}[wfg{i}];"
                           f"[wbg{i}][wfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
 
     concat_in = "".join(f"[v{i}_p]" for i in range(N))
@@ -344,19 +394,21 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
                     clip.get("highlight_words", []), hook_y, cap_y)
     shots = clip.get("shots") or []
+    facecam_box = clip.get("facecam_box")
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, shots=shots, src_w=src_w, src_h=src_h)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, shots=shots,
+                          src_w=src_w, src_h=src_h, facecam_box=facecam_box)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
-               shots: list = None, src_w: int = 0, src_h: int = 0) -> dict:
+               shots: list = None, src_w: int = 0, src_h: int = 0, facecam_box=None) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
@@ -370,9 +422,9 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
                 rel_shots.append({"start": float(s.get("start", start)) - start,
                                   "end": float(s.get("end", end)) - start,
                                   "type": s.get("type", "wide")})
-        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h, facecam_box=facecam_box, layout=layout) + f"[v0]ass={name}.ass:fontsdir=f[v]"
     else:
-        fc = _filter(layout, fg_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        fc = _filter(layout, fg_h, facecam_box=facecam_box) + f"[v0]ass={name}.ass:fontsdir=f[v]"
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]

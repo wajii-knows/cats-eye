@@ -417,6 +417,14 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        if not local.get("facecam_box"):
+            vis_box = (job.get("visuals") or {}).get("facecam_box") or job.get("facecam_box")
+            if not vis_box and job.get("creator"):
+                cr = creators.get(job["creator"])
+                if cr and cr.get("facecam_corner") in render.FACECAM_CORNERS:
+                    vis_box = list(render.FACECAM_CORNERS[cr["facecam_corner"]])
+            if vis_box:
+                local["facecam_box"] = vis_box
         if clip.get("shots"):
             local["shots"] = [dict(s, start=round(s["start"] - off, 2), end=round(s["end"] - off, 2)) for s in clip["shots"]]
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
@@ -502,13 +510,14 @@ PAD = 8                # seconds kept either side of a fetched piece, so clips c
 
 
 def _fetch_piece(job, clip, full_audio):
-    """Long videos: download just this clip's stretch and pin down exactly where it starts."""
+    """Long videos: download just this clip's stretch (at 1080p for sharp corner facecams & gameplay) and pin down where it starts."""
     d = Path(job["dir"])
     o = job["options"]
     try:
         want = max(0.0, clip["start"] - PAD)
+        piece_quality = max(1080, int(o.get("quality", 720)))
         piece = media.download_section(job["source"]["url"], d / "clips", f"{clip['id']}.src", want,
-                                       min(job["duration"], clip["end"] + PAD), int(o["quality"]))
+                                       min(job["duration"], clip["end"] + PAD), piece_quality)
         wav = d / "clips" / f"{clip['id']}.wav"
         media.extract_audio(piece, wav)
         part = media.load_audio(wav)
@@ -607,7 +616,8 @@ def _run_job_body(job, d, o, src, t0, notes, sctx):
         span = (o["range_end"] or meta["duration"]) - (o["range_start"] or 0)
         pieces = span > LONG_VIDEO or meta["duration"] <= 0
         if not pieces:  # shorter video: fetch all of it in the background while the audio is worked on
-            video = fetch.submit(media.download, src["url"], d, int(o["quality"]))
+            dl_q = max(1080, int(o["quality"])) if o.get("layout") in render.FACECAM_LAYOUTS else int(o["quality"])
+            video = fetch.submit(media.download, src["url"], d, dl_q)
         audio_file = media.download_audio(src["url"], d, lambda p: _set(job, progress=0.03 + 0.1 * p))
     else:
         pieces, audio_file = False, Path(src["path"])

@@ -245,6 +245,36 @@ check(
     ai_clips[0]["scroll_stopper"],
 )
 
+# 6. Streamer-Only Clipper Playbook checks (5.1 - 5.4)
+from studio import live, render  # noqa: E402
+
+check(
+    "5.1 FACECAM_CORNERS defines 4 standard 16:9 corners (cam_tl, cam_tr, cam_bl, cam_br)",
+    set(render.FACECAM_CORNERS) == {"cam_tl", "cam_tr", "cam_bl", "cam_br"}
+    and render.FACECAM_CORNERS["cam_tl"] == (0.0, 0.0, 0.28, 0.32)
+    and render.FACECAM_CORNERS["cam_tr"] == (0.72, 0.0, 0.28, 0.32),
+    str(render.FACECAM_CORNERS),
+)
+lay_tl, fg_tl, hook_y_tl, cap_y_tl = render.geometry(1920, 1080, "cam_tl")
+flt_tl = render._filter("cam_tl", fg_tl)
+check(
+    "5.1 facecam layout crops corner into Top 38% (730px) and clean center gameplay (x=0.22..0.78) into Bottom 62% (1190px)",
+    fg_tl == 730 and hook_y_tl == 730 and "crop=iw*0.2800:ih*0.3200:iw*0.0000:ih*0.0000" in flt_tl and "crop=iw*0.5600:ih:iw*0.2200:0" in flt_tl and "1080:730" in flt_tl and "1080:1190" in flt_tl,
+    flt_tl,
+)
+check(
+    "5.2 live.Session.CLIP_WORDS & creators.DEFAULTS trigger_words catch English and Hinglish streamer freakout phrases",
+    all(live.Session.CLIP_WORDS.search(p) for p in ("clip that", "what the fuck", "no way bro", "did you see that", "wasted", "busted", "bhaisahab", "ye kya tha", "arey bhai", "khatam"))
+    and "bhaisahab" in creators.DEFAULTS["trigger_words"]
+    and "no way bro" in creators.DEFAULTS["trigger_words"],
+    creators.DEFAULTS["trigger_words"],
+)
+check(
+    "5.3 render filter applies Vice City color/contrast punch and Parasocial Story Hook rule",
+    render.COLOR_PUNCH in flt_tl and "Parasocial Story Hook" in brain.RULES,
+    flt_tl,
+)
+
 print("ALL PASSED" if not fails else f"{len(fails)} failed")
 shutil.rmtree(os.environ["PEAKCUT_DATA"], ignore_errors=True)
 sys.exit(1 if fails else 0)

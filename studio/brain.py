@@ -101,7 +101,7 @@ Rules:
 - focus_score: 0-100, single clean beat (90+ one unmistakable idea/emotion; <60 tries to do 2-3 things).
 - clarity_score: 0-100, stranger clarity + works on mute (90+ any stranger gets it in 2s; <60 needs insider context).
 - score: 0-100, calibrated overall viral score (85-100 = 1M+ Stranger-ready; 70-84 = 100K+ Good for audience; 55-69 = Followers only; <55 = weak, skip).
-- hook: at most 5 words, ALL CAPS, shown as big text on the video so the clip works on mute. Curiosity, true to what happens.
+- hook: at most 5 words, ALL CAPS, shown as big text on the seam banner so the clip works on mute. When clipping a streamer, write a 3rd-person Parasocial Story Hook (e.g. "SPEED COULDN'T BELIEVE THIS", "TECHNO FOUND A SECRET JET", "BRO BROKE THE GAME"). Curiosity, true to what happens.
 - title: at most 70 characters, for the post.
 - description: one or two sentences.
 - hashtags: 5 tags without the # sign.

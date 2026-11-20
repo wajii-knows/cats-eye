@@ -406,18 +406,33 @@ class Session:
         self.verdicts.append(dict(v, result=result))
         del self.verdicts[:-6]
 
-    CLIP_WORDS = re.compile(r"\bclip(\s+(it|that|this))?\b", re.I)
+    CLIP_WORDS = re.compile(
+        r"\b(clip(\s+(it|that|this))?|what\s+the\s+fuck|no\s+way\s+bro|oh\s+my\s+god|"
+        r"did\s+you\s+see\s+that|are\s+you\s+seeing\s+this|bro\s+what|wasted|busted|"
+        r"bhaisahab|bhai\s+sahab|ye\s+kya\s+tha|arey\s+bhai|khatam|impossible)\b",
+        re.I,
+    )
     SAID_BEFORE, SAID_AFTER, SAID_GAP = 60, 15, 45
 
     def _triggers(self, new_words):
-        """Built in: when someone says "clip" ("clip it", "clip that"), the AI looks at that moment as soon as its
-        transcript is ready; people say it right after something worth clipping. Then the creator's own trigger
-        phrases from Setup, which clip straight away with no AI check."""
-        for w in new_words or []:
-            if self.CLIP_WORDS.search(re.sub(r"[^a-z' ]", "", w["w"].lower())) and w["s"] - self.last_said > self.SAID_GAP \
-                    and not self.said:
-                self.said = {"t": w["s"], "why": 'Someone said "clip"'}
-                self.last_said = w["s"]
+        """Built in: when someone says "clip" or screams a streamer freakout phrase, the AI checks immediately
+        (or if loudness also spiked on a freakout phrase, immediately queues a 30s live clip). Then the creator's
+        own trigger phrases from Setup, which clip straight away with no AI check."""
+        if new_words:
+            cleaned = [(w, re.sub(r"[^a-z0-9' ]", "", str(w.get("w", "")).lower()).strip()) for w in new_words]
+            for idx, (w, tok) in enumerate(cleaned):
+                window_str = " ".join(t for _, t in cleaned[idx: idx + 5] if t)
+                m = self.CLIP_WORDS.search(window_str) or self.CLIP_WORDS.search(tok)
+                if m:
+                    t = float(w["s"])
+                    matched_phrase = m.group(0).strip()
+                    if t - self.last_said > self.SAID_GAP and not self.said:
+                        self.said = {"t": t, "why": f'Someone said "{matched_phrase}"'}
+                        self.last_said = t
+                    if getattr(self, "spike", None) and not matched_phrase.lower().startswith("clip") and t - self.last_trigger > 45:
+                        self.last_trigger = t
+                        self.manual.append({"start": max(0.0, t - 30), "end": t + 2, "why": f'Streamer reaction: "{matched_phrase}"'})
+                    break
         phrases = [p.strip().lower() for p in self.settings.get("trigger_words", "").split(",") if p.strip()]
         if not phrases or not new_words:
             return

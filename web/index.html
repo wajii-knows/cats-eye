@@ -1510,7 +1510,7 @@ function drawAdd(variant) {
     </div></div></form>`;
   drawAtt();
 }
-const LAYOUT_SHORT = {multishot:"Multishot", blur:"Blurred fill", zoom:"Zoomed in", crop:"Fill screen"};
+const LAYOUT_SHORT = {multishot:"Multishot", cam_tl:"Cam Top-Left", cam_tr:"Cam Top-Right", cam_bl:"Cam Bot-Left", cam_br:"Cam Bot-Right", blur:"Blurred fill", zoom:"Zoomed in", crop:"Fill screen"};
 const CAP_LOOK = {bounce:{font:"'Archivo Black'", hl:"#FFFF00", up:true}, hype:{font:"Anton", hl:"#FF3C3C", up:true}, clean:{font:"Poppins", hl:"#6BD7FF", up:false, w:800}};
 function capPrev(k) {
   const s = CAP_LOOK[k] || {font:"inherit", hl:"#FF8B33", up:true};
@@ -2003,6 +2003,7 @@ function drawCreatorForm() {
     <div class="card"><h2>Clips</h2><p class="help">How this creator's clips look.</p>
       <div class="fields"><label class="f">Caption style<select data-k="style">${opts(S.status.styles, c.style)}</select></label>
         <label class="f">Layout<select data-k="layout">${opts(S.status.layouts, c.layout)}</select></label>
+        <label class="f">Streamer facecam corner<select data-k="facecam_corner">${opts({auto:"Auto-detect", cam_tl:"Top-Left (Techno Gamerz, xQc)", cam_tr:"Top-Right (IShowSpeed, Kai Cenat)", cam_bl:"Bottom-Left", cam_br:"Bottom-Right"}, c.facecam_corner || "auto")}</select></label>
         <label class="f">Shortest clip (seconds)<input data-k="min_len" type="number" value="${c.min_len}"></label>
         <label class="f">Longest clip (seconds)<input data-k="max_len" type="number" value="${c.max_len}"></label>
         <label class="f">Clips per video<input data-k="max_clips" type="number" value="${c.max_clips}"></label>
