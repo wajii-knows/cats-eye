@@ -159,6 +159,8 @@ class Gate:
                 # changes must come from our own pages: the browser has to say so, and it has to match
                 if not _from_here(req, must_say=True):
                     return await deny(403, "Cross-site requests are not allowed.")
+        if config.COLAB_MODE and path == "/" and not user:
+            return await deny(303, "", redirect="/login")      # no marketing page in Colab: straight to the owner password
         if not user and not is_open:
             if path == "/app" or path.startswith("/app/") or (config.COLAB_MODE and path == "/"):
                 return await deny(401, "", redirect="/login")

@@ -332,6 +332,9 @@ def end_session(token: str):
 
 
 def cookie_args(token: str) -> dict:
+    if config.COLAB_MODE:       # Colab serves the app through an https proxy, sometimes inside a frame: the cookie must survive that
+        return {"key": COOKIE, "value": token, "max_age": config.SESSION_DAYS * 86400, "httponly": True,
+                "samesite": "none", "secure": True, "path": "/"}
     return {"key": COOKIE, "value": token, "max_age": config.SESSION_DAYS * 86400, "httponly": True,
             "samesite": "lax", "secure": config.HTTPS, "path": "/"}
 
