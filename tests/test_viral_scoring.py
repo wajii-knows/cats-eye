@@ -249,18 +249,67 @@ check(
 from studio import live, render  # noqa: E402
 
 check(
-    "5.1 FACECAM_CORNERS defines 4 standard 16:9 corners (cam_tl, cam_tr, cam_bl, cam_br)",
-    set(render.FACECAM_CORNERS) == {"cam_tl", "cam_tr", "cam_bl", "cam_br"}
-    and render.FACECAM_CORNERS["cam_tl"] == (0.0, 0.0, 0.28, 0.32)
-    and render.FACECAM_CORNERS["cam_tr"] == (0.72, 0.0, 0.28, 0.32),
-    str(render.FACECAM_CORNERS),
+    "5.1 manual corner selection removed from LAYOUTS & creators.DEFAULTS; single auto 'facecam' layout used",
+    "facecam" in render.LAYOUTS
+    and all(k not in render.LAYOUTS for k in ("cam_tl", "cam_tr", "cam_bl", "cam_br"))
+    and "facecam_corner" not in creators.DEFAULTS
+    and 'data-k="facecam_corner"' not in index_html,
+    str(list(render.LAYOUTS.keys())),
 )
-lay_tl, fg_tl, hook_y_tl, cap_y_tl = render.geometry(1920, 1080, "cam_tl")
-flt_tl = render._filter("cam_tl", fg_tl)
+
+
+def _make_streamer_frame(corner_key: str) -> np.ndarray:
+    """Create a 180x320 RGB 16:9 frame with cool gameplay background and a webcam box + skin-tone face in corner_key."""
+    fh, fw = 180, 320
+    frame = np.zeros((fh, fw, 3), dtype=np.uint8)
+    # Cool blue/teal gameplay background
+    frame[:, :, 0] = 35
+    frame[:, :, 1] = 85
+    frame[:, :, 2] = 135
+    cx, cy, cw, ch = render.FACECAM_CORNERS[corner_key]
+    x0, x1 = int(round(cx * fw)), int(round((cx + cw) * fw))
+    y0, y1 = int(round(cy * fh)), int(round((cy + ch) * fh))
+    # Dark studio backdrop inside webcam + bright border
+    frame[y0:y1, x0:x1] = (24, 24, 30)
+    if cx < 0.5:
+        frame[y0:y1, max(0, x1 - 2):min(fw, x1 + 1)] = (230, 180, 70)
+    else:
+        frame[y0:y1, max(0, x0 - 1):min(fw, x0 + 2)] = (230, 180, 70)
+    if cy < 0.5:
+        frame[max(0, y1 - 2):min(fh, y1 + 1), x0:x1] = (230, 180, 70)
+    else:
+        frame[max(0, y0 - 1):min(fh, y0 + 2), x0:x1] = (230, 180, 70)
+    # Warm skin-toned face cluster in center of webcam box
+    pw, ph = x1 - x0, y1 - y0
+    fx0, fx1 = x0 + int(pw * 0.25), x0 + int(pw * 0.75)
+    fy0, fy1 = y0 + int(ph * 0.22), y0 + int(ph * 0.80)
+    frame[fy0:fy1, fx0:fx1] = (212, 152, 122)
+    return frame
+
+
+det_tl = render.detect_facecam_from_frames([_make_streamer_frame("cam_tl"), _make_streamer_frame("cam_tl")])
+det_tr = render.detect_facecam_from_frames([_make_streamer_frame("cam_tr"), _make_streamer_frame("cam_tr")])
+det_bl = render.detect_facecam_from_frames([_make_streamer_frame("cam_bl"), _make_streamer_frame("cam_bl")])
+det_br = render.detect_facecam_from_frames([_make_streamer_frame("cam_br"), _make_streamer_frame("cam_br")])
 check(
-    "5.1 facecam layout crops corner into Top 38% (730px) and clean center gameplay (x=0.22..0.78) into Bottom 62% (1190px)",
-    fg_tl == 730 and hook_y_tl == 730 and "crop=iw*0.2800:ih*0.3200:iw*0.0000:ih*0.0000" in flt_tl and "crop=iw*0.5600:ih:iw*0.2200:0" in flt_tl and "1080:730" in flt_tl and "1080:1190" in flt_tl,
-    flt_tl,
+    "5.1 detect_facecam_from_frames automatically identifies facecam in all 4 corners (TL, TR, BL, BR)",
+    det_tl[0] < 0.1 and det_tl[1] < 0.1
+    and det_tr[0] > 0.6 and det_tr[1] < 0.1
+    and det_bl[0] < 0.1 and det_bl[1] > 0.55
+    and det_br[0] > 0.6 and det_br[1] > 0.55,
+    f"tl={det_tl}, tr={det_tr}, bl={det_bl}, br={det_br}",
+)
+
+lay_fc, fg_fc, hook_y_fc, cap_y_fc = render.geometry(1920, 1080, "facecam")
+flt_left = render._filter("facecam", fg_fc, facecam_box=det_tl)
+flt_right = render._filter("facecam", fg_fc, facecam_box=det_tr)
+check(
+    "5.1 facecam layout places detected cam into Top 38% (730px) and shifts Bottom 62% (1190px) gameplay away from cam",
+    fg_fc == 730 and hook_y_fc == 730
+    and "1080:730" in flt_left and "1080:1190" in flt_left
+    and f"crop=iw*0.5600:ih:iw*{det_tl[0] + det_tl[2]:.4f}:0" in flt_left
+    and f"crop=iw*0.5600:ih:iw*{max(0.0, min(0.22, det_tr[0] - 0.56)):.4f}:0" in flt_right,
+    f"left={flt_left} | right={flt_right}",
 )
 check(
     "5.2 live.Session.CLIP_WORDS & creators.DEFAULTS trigger_words catch English and Hinglish streamer freakout phrases",
@@ -271,8 +320,8 @@ check(
 )
 check(
     "5.3 render filter applies Vice City color/contrast punch and Parasocial Story Hook rule",
-    render.COLOR_PUNCH in flt_tl and "Parasocial Story Hook" in brain.RULES,
-    flt_tl,
+    render.COLOR_PUNCH in flt_left and "Parasocial Story Hook" in brain.RULES,
+    flt_left,
 )
 
 print("ALL PASSED" if not fails else f"{len(fails)} failed")

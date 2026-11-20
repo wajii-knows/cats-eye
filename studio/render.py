@@ -84,23 +84,20 @@ FACECAM_CORNERS = {
     "cam_bl": (0.0, 0.65, 0.28, 0.35),   # Bottom-Left
     "cam_br": (0.72, 0.65, 0.28, 0.35),  # Bottom-Right
 }
-FACECAM_LAYOUTS = ("cam_tl", "cam_tr", "cam_bl", "cam_br", "facecam")
+FACECAM_LAYOUTS = ("facecam", "cam_tl", "cam_tr", "cam_bl", "cam_br")
 COLOR_PUNCH = "eq=brightness=-0.02:contrast=1.06:saturation=1.18"
 
 LAYOUTS = {
     "multishot": "Multishot (dynamic cuts)",
-    "cam_tl": "Streamer Cam (Top-Left + Gameplay)",
-    "cam_tr": "Streamer Cam (Top-Right + Gameplay)",
-    "cam_bl": "Streamer Cam (Bottom-Left + Gameplay)",
-    "cam_br": "Streamer Cam (Bottom-Right + Gameplay)",
+    "facecam": "Streamer cam (auto-detects facecam + gameplay)",
     "blur": "Full frame + blurred fill",
     "zoom": "Zoomed in + blurred fill",
     "crop": "Fill the screen (centre crop)",
 }
 
 
-def resolve_facecam_box(layout: str, facecam_box=None) -> tuple:
-    """Return normalized (x, y, w, h) for a corner facecam preset or an auto-detected facecam_box."""
+def resolve_facecam_box(layout: str = "facecam", facecam_box=None) -> tuple:
+    """Return normalized (x, y, w, h) from a detected facecam_box or fallback corner geometry."""
     if isinstance(facecam_box, (list, tuple)) and len(facecam_box) == 4:
         try:
             bx, by, bw, bh = [float(v) for v in facecam_box]
@@ -114,6 +111,152 @@ def resolve_facecam_box(layout: str, facecam_box=None) -> tuple:
         except (TypeError, ValueError):
             pass
     return FACECAM_CORNERS.get(layout, FACECAM_CORNERS["cam_tl"])
+
+
+def detect_facecam_from_frames(frames: list) -> tuple:
+    """Automatically detect where the streamer's corner facecam sits across sampled RGB frames.
+    Returns normalized (x, y, w, h). Uses FaceDetector when available, plus zero-CV corner border + skin-cluster vision."""
+    import numpy as np
+    valid = [np.asarray(f, dtype=np.uint8) for f in (frames or []) if f is not None and getattr(f, "ndim", 0) == 3 and f.shape[0] >= 36 and f.shape[1] >= 64]
+    if not valid:
+        return FACECAM_CORNERS["cam_tl"]
+
+    # 1. Try registered / OpenCV face detector first if available
+    try:
+        from .pipeline.stages.analyze_snapshots import get_face_detector
+        det = get_face_detector()
+        if det and det.available:
+            corner_faces = []
+            for rgb in valid:
+                for b in (det.detect(rgb) or []):
+                    if isinstance(b, (list, tuple)) and len(b) == 4:
+                        bx, by, bw, bh = [float(v) for v in b]
+                        cx, cy = bx + 0.5 * bw, by + 0.5 * bh
+                        if 0.002 <= bw * bh <= 0.22 and (cx < 0.42 or cx > 0.58) and (cy < 0.45 or cy > 0.55):
+                            corner_faces.append((bx, by, bw, bh, cx, cy))
+            if corner_faces:
+                med_cx = float(np.median([x[4] for x in corner_faces]))
+                med_cy = float(np.median([x[5] for x in corner_faces]))
+                med_bw = float(np.median([x[2] for x in corner_faces]))
+                med_bh = float(np.median([x[3] for x in corner_faces]))
+                cw = round(max(0.24, min(0.34, med_bw * 2.2)), 4)
+                ch = round(max(0.28, min(0.38, med_bh * 2.2)), 4)
+                cx = 0.0 if med_cx < 0.5 else round(1.0 - cw, 4)
+                cy = 0.0 if med_cy < 0.5 else round(1.0 - ch, 4)
+                return (cx, cy, cw, ch)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2. Zero-CV corner webcam detector: skin-tone face cluster + persistent L-border + portrait contrast
+    fh, fw = valid[0].shape[:2]
+    grays = []
+    skins = []
+    for rgb in valid:
+        if rgb.shape[:2] != (fh, fw):
+            continue
+        r = rgb[:, :, 0].astype(np.float32)
+        g = rgb[:, :, 1].astype(np.float32)
+        b = rgb[:, :, 2].astype(np.float32)
+        gray = 0.299 * r + 0.587 * g + 0.114 * b
+        cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
+        cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
+        skin = (
+            (r > 60.0) & (g > 40.0) & (b > 20.0)
+            & (r > g) & (r > b)
+            & ((r - np.minimum(g, b)) > 12.0)
+            & (cb >= 77.0) & (cb <= 127.0)
+            & (cr >= 133.0) & (cr <= 173.0)
+        )
+        grays.append(gray)
+        skins.append(skin.astype(np.float32))
+
+    if not grays:
+        return FACECAM_CORNERS["cam_tl"]
+
+    mean_gray = np.mean(grays, axis=0)
+    mean_skin = np.mean(skins, axis=0)
+    gx = np.abs(mean_gray[:, 2:] - mean_gray[:, :-2])
+    gy = np.abs(mean_gray[2:, :] - mean_gray[:-2, :])
+    global_edge = float(gx.mean() + gy.mean()) * 0.5 + 1e-3
+    center_skin = float(mean_skin[int(fh * 0.35):int(fh * 0.65), int(fw * 0.35):int(fw * 0.65)].mean())
+
+    best_key = "cam_tl"
+    best_box = FACECAM_CORNERS["cam_tl"]
+    best_score = -1e9
+
+    for key, (cx0, cy0, cw0, ch0) in FACECAM_CORNERS.items():
+        is_left = cx0 < 0.5
+        is_top = cy0 < 0.5
+
+        # Scan candidate box dimensions around standard corner preset to lock onto persistent webcam frame borders
+        best_b_score = 0.0
+        refined_w, refined_h = cw0, ch0
+        for w_cand in (0.24, 0.28, 0.32):
+            for h_cand in (0.28, 0.32, 0.35):
+                vx = int(round((w_cand if is_left else (1.0 - w_cand)) * fw))
+                hy = int(round((h_cand if is_top else (1.0 - h_cand)) * fh))
+                vx_idx = max(1, min(gx.shape[1] - 2, vx - 1))
+                hy_idx = max(1, min(gy.shape[0] - 2, hy - 1))
+                y_sl = slice(0, min(gx.shape[0], hy)) if is_top else slice(max(0, hy), gx.shape[0])
+                x_sl = slice(0, min(gy.shape[1], vx)) if is_left else slice(max(0, vx), gy.shape[1])
+                v_edge = float(gx[y_sl, max(0, vx_idx - 1):min(gx.shape[1], vx_idx + 2)].mean()) if y_sl.stop > y_sl.start else 0.0
+                h_edge = float(gy[max(0, hy_idx - 1):min(gy.shape[0], hy_idx + 2), x_sl].mean()) if x_sl.stop > x_sl.start else 0.0
+                b_sc = (v_edge + h_edge) / (2.0 * global_edge)
+                if b_sc > best_b_score:
+                    best_b_score = b_sc
+                    if b_sc >= 1.45:
+                        refined_w, refined_h = w_cand, h_cand
+
+        rx = 0.0 if is_left else round(1.0 - refined_w, 4)
+        ry = 0.0 if is_top else round(1.0 - refined_h, 4)
+        x0, x1 = int(round(rx * fw)), int(round((rx + refined_w) * fw))
+        y0, y1 = int(round(ry * fh)), int(round((ry + refined_h) * fh))
+        pw, ph = max(4, x1 - x0), max(4, y1 - y0)
+
+        patch_skin = mean_skin[y0:y1, x0:x1]
+        inner_skin_patch = patch_skin[int(ph * 0.18):int(ph * 0.85), int(pw * 0.20):int(pw * 0.80)]
+        inner_skin = float(inner_skin_patch.mean()) if inner_skin_patch.size else 0.0
+        outer_skin = max(0.0, (float(patch_skin.mean()) * patch_skin.size - inner_skin * inner_skin_patch.size) / max(1, patch_skin.size - inner_skin_patch.size))
+        skin_signal = max(0.0, inner_skin - 0.5 * center_skin) + max(0.0, inner_skin - outer_skin)
+
+        patch_gray = mean_gray[y0:y1, x0:x1]
+        inner_gray = patch_gray[int(ph * 0.18):int(ph * 0.85), int(pw * 0.20):int(pw * 0.80)]
+        portrait_signal = min(1.0, float(inner_gray.std()) / 32.0) if inner_gray.size else 0.0
+
+        total_score = 3.2 * skin_signal + 1.1 * min(3.0, best_b_score) + 0.4 * portrait_signal
+        if total_score > best_score:
+            best_score = total_score
+            best_key = key
+            best_box = (rx, ry, refined_w, refined_h)
+
+    return best_box
+
+
+def auto_detect_facecam(src: Path, start: float = 0.0, end: float = 0.0) -> tuple:
+    """Sample up to 3 lightweight thumbnails from src across [start, end] and detect the streamer's facecam box."""
+    import numpy as np
+    from PIL import Image
+    dur = max(0.5, float(end) - float(start))
+    offsets = [start + dur * frac for frac in ((0.2, 0.5, 0.8) if dur >= 3.0 else (0.5,))]
+    frames = []
+    tmp_dir = Path(tempfile.mkdtemp(prefix="fc_det_"))
+    try:
+        for idx, ts in enumerate(offsets):
+            out_jpg = tmp_dir / f"f{idx}.jpg"
+            p = subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, ts):.2f}", "-i", str(src),
+                 "-frames:v", "1", "-vf", "scale=320:180", "-q:v", "5", str(out_jpg)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                creationflags=NO_WINDOW, timeout=15,
+            )
+            if p.returncode == 0 and out_jpg.is_file():
+                with Image.open(out_jpg) as im:
+                    frames.append(np.asarray(im.convert("RGB"), dtype=np.uint8))
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return detect_facecam_from_frames(frames)
 
 
 def _ts(t):
@@ -264,15 +407,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _facecam_stack_chain(in_pad: str, out_pad: str, tag: str, cam_box: tuple) -> str:
-    """Crops corner facecam into Top 38% (1080x730) and clean center gameplay (x=0.22..0.78) into Bottom 62% (1080x1190)."""
+    """Crops detected corner facecam into Top 38% (1080x730) and shifts clean gameplay (width 56%) away from the facecam into Bottom 62% (1080x1190)."""
     cx, cy, cw, ch = cam_box
     top_h = int(round(H * 0.38 / 2)) * 2   # 730
     bot_h = H - top_h                      # 1190
+    gw = 0.5600
+    if cx + cw * 0.5 < 0.5:
+        gx = max(0.2200, min(1.0 - gw, round(cx + cw, 4)))
+    else:
+        gx = max(0.0, min(0.2200, round(cx - gw, 4)))
     return (
         f"{in_pad}split=2[fc_t_{tag}][fc_b_{tag}];"
         f"[fc_t_{tag}]crop=iw*{cw:.4f}:ih*{ch:.4f}:iw*{cx:.4f}:ih*{cy:.4f},"
         f"scale={W}:{top_h}:force_original_aspect_ratio=increase,crop={W}:{top_h},setsar=1[top_{tag}];"
-        f"[fc_b_{tag}]crop=iw*0.5600:ih:iw*0.2200:0,"
+        f"[fc_b_{tag}]crop=iw*{gw:.4f}:ih:iw*{gx:.4f}:0,"
         f"scale={W}:{bot_h}:force_original_aspect_ratio=increase,crop={W}:{bot_h},setsar=1[bot_{tag}];"
         f"[top_{tag}][bot_{tag}]vstack,{COLOR_PUNCH},setsar=1{out_pad};"
     )
@@ -395,6 +543,9 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                     clip.get("highlight_words", []), hook_y, cap_y)
     shots = clip.get("shots") or []
     facecam_box = clip.get("facecam_box")
+    if not facecam_box and (layout in FACECAM_LAYOUTS or (layout == "multishot" and any(isinstance(s, dict) and s.get("type") == "split" for s in shots))):
+        facecam_box = auto_detect_facecam(src, start, end)
+        clip["facecam_box"] = list(facecam_box)
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also

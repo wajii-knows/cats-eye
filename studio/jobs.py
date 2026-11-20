@@ -419,12 +419,12 @@ def render_one(job, clip, words):
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
         if not local.get("facecam_box"):
             vis_box = (job.get("visuals") or {}).get("facecam_box") or job.get("facecam_box")
-            if not vis_box and job.get("creator"):
-                cr = creators.get(job["creator"])
-                if cr and cr.get("facecam_corner") in render.FACECAM_CORNERS:
-                    vis_box = list(render.FACECAM_CORNERS[cr["facecam_corner"]])
+            if not vis_box and (local.get("layout") in render.FACECAM_LAYOUTS or local.get("layout") == "multishot"):
+                vis_box = list(render.auto_detect_facecam(src, local["start"], local["end"]))
+                job["facecam_box"] = vis_box
             if vis_box:
                 local["facecam_box"] = vis_box
+                clip["facecam_box"] = vis_box
         if clip.get("shots"):
             local["shots"] = [dict(s, start=round(s["start"] - off, 2), end=round(s["end"] - off, 2)) for s in clip["shots"]]
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English

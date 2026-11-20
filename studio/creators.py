@@ -14,7 +14,7 @@ def _root() -> Path:
 
 _lock = threading.RLock()
 
-DEFAULTS = {"name": "", "channel": "", "style": "bounce", "layout": "blur", "facecam_corner": "auto", "min_len": 15, "max_len": 35,
+DEFAULTS = {"name": "", "channel": "", "style": "bounce", "layout": "blur", "min_len": 15, "max_len": 35,
             "max_clips": 6, "min_score": 80, "auto_watch": False, "buffer_min": 20, "live_per_hour": 4, "ai_every_min": 3, "ai_only_on_spike": True, "auto_jump_pct": 60,
             "plan": "free", "decide_mode": "both", "must_clip_min": 0, "min_gap_min": 2,
             "trigger_words": "clip that, clip it, what the fuck, no way bro, oh my god, did you see that, wasted, busted, bhaisahab, ye kya tha, arey bhai, khatam",
@@ -73,8 +73,6 @@ def _clean(data: dict) -> dict:
             v = v if v in ("both", "either") else "both"
         elif k == "privacy":
             v = v if v in ("public", "unlisted", "private") else "public"
-        elif k == "facecam_corner":
-            v = v if v in ("auto", "cam_tl", "cam_tr", "cam_bl", "cam_br") else "auto"
         else:
             v = str(v).strip()[:300]
         out[k] = v
