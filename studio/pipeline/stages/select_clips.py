@@ -33,6 +33,9 @@ class SelectClipsStage(Stage):
     def run(self, ctx: StageContext) -> Dict[str, Any]:
         words = ctx.inputs.get("transcript_words", [])
         loudness = ctx.inputs.get("loudness_db", [])
+        visual_snaps = ctx.inputs.get("analyzed_snapshots")
+        if not isinstance(visual_snaps, list):
+            visual_snaps = None
         duration = float(ctx.job.get("duration") or 0.0)
         opts = ctx.job.get("options", {})
 
@@ -55,11 +58,14 @@ class SelectClipsStage(Stage):
                 max_clips=max_clips,
                 min_len=min_len,
                 max_len=max_len,
+                visual_metrics=visual_snaps,
             )
         except Exception as e:
             # Fallback to pure loudness if AI fails
             logger.warning("AI clip selection failed, falling back to loudness: %s", e)
-            found = brain.fallback_by_loudness(db_arr, words, max_clips, max_len, duration, min_len=min_len)
+            found = brain.fallback_by_loudness(
+                db_arr, words, max_clips, max_len, duration, min_len=min_len, visual_metrics=visual_snaps,
+            )
             ai_resp = {}
 
         if not found and duration > 5.0:
@@ -72,7 +78,9 @@ class SelectClipsStage(Stage):
                 e = round(min(duration, s + target), 2)
                 if any(not (e <= p["start"] or s >= p["end"]) for p in found):
                     continue
-                sc = brain.score_clip(s, e, words, z, min_len=min_len, max_len=max_len)
+                sc = brain.score_clip(
+                    s, e, words, z, min_len=min_len, max_len=max_len, visual_snaps=visual_snaps,
+                )
                 seg_z = z[int(s):int(e) + 1] if len(z) > int(s) else None
                 found.append({
                     "start": s,

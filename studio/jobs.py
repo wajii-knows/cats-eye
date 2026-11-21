@@ -697,6 +697,7 @@ def _run_job_body(job, d, o, src, t0, notes, sctx):
             raise _JobCancelled()
 
     _chk_cancel()
+    job.setdefault("stages", {})
     usage.set_context(job["creator"], job["title"] or src.get("name"))
     resuming = bool(job.pop("resume", False)) and (d / "words.json").is_file()
     if resuming:   # after a restart or pause: keep the transcript parts, clips and AI answers already made, and carry on
@@ -827,94 +828,179 @@ def _run_job_body(job, d, o, src, t0, notes, sctx):
                 words = json.loads((d / "words.json").read_text(encoding="utf-8"))
             except ValueError:
                 words = []
-            done_blocks = min(int(job.get("done_blocks", 0)), len(blocks)) if words else 0
+            done_blocks = min(int(job.get("done_blocks", 0)), len(blocks))
             tokens, model = int((job.get("ai") or {}).get("tokens", 0)), (job.get("ai") or {}).get("model")
             if done_blocks < len(blocks):     # words past the last finished part are transcribed again
                 cut = blocks[done_blocks][0] / 16000
                 words = [w for w in words if w["s"] < cut]
-            for c in job["clips"]:            # clips found before the restart that were not finished yet
-                if c.get("status") not in ("done", "error"):
-                    c["status"] = "queued"
-                    futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
             save(job)
-        # The transcript of the next part is written while the AI is still reading this one (the AI is a wait on the
-        # network, the transcript is work on this machine), so neither waits for the other.
-        ahead = ThreadPoolExecutor(2, thread_name_prefix="ahead")
-        heard, now_on = {}, [done_blocks]
+        already_selected = resuming and done_blocks >= len(blocks) and bool(job.get("clips"))
 
-        def hear(i):
-            if i < len(blocks) and i >= done_blocks and i not in heard:
-                a_, b_ = blocks[i]
-                last = [0.0]
+        # Phase 1: Full-video transcription first (every block is transcribed before any clip is picked).
+        if done_blocks < len(blocks):
+            ahead = ThreadPoolExecutor(2, thread_name_prefix="ahead")
+            heard, now_on = {}, [done_blocks]
 
-                def tp(p, i=i, a_=a_, b_=b_):
-                    if now_on[0] == i and p - last[0] > 0.05:      # only the part being shown moves the bar
-                        last[0] = p
-                        _set(job, progress=max(job["progress"], 0.14 + 0.78 * ((a_ - lo) + p * (b_ - a_)) / max(1, hi - lo)))
-                heard[i] = ahead.submit(ctx.bind(transcribe.transcribe), audio[a_:b_], tp)
+            def hear(i):
+                if i < len(blocks) and i >= done_blocks and i not in heard:
+                    a_, b_ = blocks[i]
+                    last = [0.0]
 
-        for bi, (a, b) in enumerate(blocks):
-            _chk_cancel()
-            if bi < done_blocks:
-                continue                      # transcribed and checked by the AI before the restart
-            shift = a / 16000
-            where = f" (minute {round((a - lo) / 16000 / 60)} of {round(span / 60)})" if len(blocks) > 1 else ""
-            if yt:
-                _set(job, stage="Reading the transcript" + where)
-                bw = [dict(w, s=round(w["s"] - shift, 2), e=round(w["e"] - shift, 2)) for w in yt[0] if a / 16000 <= w["s"] < b / 16000]
-            else:
-                _set(job, stage="Writing the transcript" + where)
-                now_on[0] = bi
-                hear(bi)
-                hear(bi + 1)
-                bw = heard.pop(bi).result()
-            _chk_cancel()
-            _set(job, progress=max(job["progress"], 0.14 + 0.78 * (b - lo) / max(1, hi - lo)))
-            words += [dict(w, s=round(w["s"] + shift, 2), e=round(w["e"] + shift, 2)) for w in bw]
-            (d / "words.json").write_text(json.dumps(words), encoding="utf-8")
-            job["stages"]["transcribe"] = {"status": "done", "cached": False}
-            _set(job, stage="Finding the best moments" + where, word_count=len(words))
-            left = int(o["max_clips"]) - len(job["clips"])
-            if left <= 0 or len(bw) < 8:
+                    def tp(p, i=i, a_=a_, b_=b_):
+                        if now_on[0] == i and p - last[0] > 0.05:
+                            last[0] = p
+                            _set(job, progress=max(job["progress"], 0.14 + 0.44 * ((a_ - lo) + p * (b_ - a_)) / max(1, hi - lo)))
+                    heard[i] = ahead.submit(ctx.bind(transcribe.transcribe), audio[a_:b_], tp)
+
+            for bi, (a, b) in enumerate(blocks):
+                _chk_cancel()
+                if bi < done_blocks:
+                    continue
+                shift = a / 16000
+                where = f" (part {bi + 1} of {len(blocks)})" if len(blocks) > 1 else ""
+                if yt:
+                    _set(job, stage="Reading the transcript" + where)
+                    bw = [dict(w, s=round(w["s"] - shift, 2), e=round(w["e"] - shift, 2)) for w in yt[0] if a / 16000 <= w["s"] < b / 16000]
+                else:
+                    _set(job, stage="Writing the full transcript" + where)
+                    now_on[0] = bi
+                    hear(bi)
+                    hear(bi + 1)
+                    bw = heard.pop(bi).result()
+                _chk_cancel()
+                words += [dict(w, s=round(w["s"] + shift, 2), e=round(w["e"] + shift, 2)) for w in bw]
+                (d / "words.json").write_text(json.dumps(words), encoding="utf-8")
+                job["stages"]["transcribe"] = {"status": "done", "cached": False}
                 job["done_blocks"] = bi + 1
-                save(job)
-                continue
-            quota = max(1, math.ceil(left / (len(blocks) - bi)))
-            s0 = int((a - lo) / 16000)
+                _set(job, progress=max(job["progress"], 0.14 + 0.44 * (b - lo) / max(1, hi - lo)), word_count=len(words))
+            _shutdown_pools(ahead)
+            ahead = None
+        elif not (d / "words.json").is_file():
+            (d / "words.json").write_text(json.dumps(words), encoding="utf-8")
+
+        if not already_selected:
+            _chk_cancel()
+            # Phase 2: Check all frame shots across the full video before picking clips.
+            frames_file = d / "frame_metrics.json"
+            v_path = None
+            if src["type"] == "file":
+                v_path = job.get("source_path") or src.get("path")
+            elif not pieces:
+                _set(job, stage="Getting the video for frame analysis", progress=max(job["progress"], 0.60))
+                v_path = whole_video()
+            else:
+                v_path = job.get("source_path")
+            _chk_cancel()
+
+            visual_metrics = None
+            if resuming and frames_file.is_file():
+                try:
+                    visual_metrics = json.loads(frames_file.read_text(encoding="utf-8"))
+                except ValueError:
+                    visual_metrics = None
+            if visual_metrics is None and v_path and Path(v_path).is_file():
+                _set(job, stage="Checking all video frames", progress=max(job["progress"], 0.62))
+                last_vp = [0.0]
+
+                def _vp(frac):
+                    if frac - last_vp[0] > 0.08:
+                        last_vp[0] = frac
+                        _set(job, progress=max(job["progress"], 0.62 + 0.12 * frac))
+
+                try:
+                    visual_metrics = media.scan_frame_metrics(
+                        Path(v_path),
+                        start=lo / 16000,
+                        end=hi / 16000,
+                        interval_sec=3.0,
+                        max_frames=300,
+                        on_progress=_vp,
+                        should_cancel=lambda: sctx.is_cancelled() or job["id"] in _paused_ids or job["id"] not in _jobs,
+                    )
+                    _chk_cancel()
+                    frames_file.write_text(json.dumps(visual_metrics), encoding="utf-8")
+                    job["stages"]["analyze_frames"] = {"status": "done", "frames": len(visual_metrics)}
+                    save(job)
+                except _JobPaused:
+                    raise
+                except _JobCancelled:
+                    raise
+                except Exception:
+                    visual_metrics = None
+
             snaps = None
-            if flags.is_on("PEAKCUT_SNAPSHOTS"):
-                v_path = job.get("source_path") or (vstate.get("path") if "path" in vstate else None)
-                if not v_path and src.get("type") == "file":
-                    v_path = src.get("path")
-                if v_path and Path(v_path).is_file():
-                    try:
-                        snaps_dir = d / "snapshots" / f"block_{bi}"
-                        snaps = media.extract_snapshots(Path(v_path), snaps_dir, start=a / 16000, end=b / 16000,
-                                                        interval_sec=4.0, max_snapshots=20)
-                    except Exception:
-                        snaps = None
-            found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
-                                         job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append,
-                                         snapshots=snaps)
+            if flags.is_on("PEAKCUT_SNAPSHOTS") and v_path and Path(v_path).is_file():
+                try:
+                    snaps = media.extract_snapshots(
+                        Path(v_path),
+                        d / "snapshots" / "full",
+                        start=lo / 16000,
+                        end=hi / 16000,
+                        interval_sec=max(4.0, span / 40.0),
+                        max_snapshots=40,
+                    )
+                except Exception:
+                    snaps = None
+
+            # Phase 3: Global viral selection across the entire video (no per-block quotas).
+            _chk_cancel()
+            _set(job, stage="Finding the most viral clips across the full video", progress=max(job["progress"], 0.76))
+            shift0 = lo / 16000
+            rel_words = [dict(w, s=round(w["s"] - shift0, 2), e=round(w["e"] - shift0, 2)) for w in words if lo / 16000 <= w["s"] <= hi / 16000] if shift0 > 0 else words
+            rel_vmetrics = (
+                [dict(m, timestamp=round(float(m.get("timestamp", m.get("time", 0.0))) - shift0, 2), time=round(float(m.get("time", m.get("timestamp", 0.0))) - shift0, 2))
+                 for m in visual_metrics]
+                if (visual_metrics and shift0 > 0) else visual_metrics
+            )
+            rel_snaps = (
+                [dict(s, time=round(float(s.get("time", 0.0)) - shift0, 2)) for s in snaps]
+                if (snaps and shift0 > 0) else snaps
+            )
+            found, ai_meta = brain.find_clips(
+                rel_words,
+                db,
+                span,
+                job["title"],
+                job["uploader"],
+                int(o["max_clips"]),
+                int(o["min_len"]),
+                int(o["max_len"]),
+                notes.append,
+                snapshots=rel_snaps,
+                visual_metrics=rel_vmetrics,
+            )
             _chk_cancel()
             job["stages"]["select_clips"] = {"status": "done", "cached": False}
-            tokens += ai.get("tokens", 0)
-            model = ai.get("model") or model
-            if ai.get("note"):
-                notes.append(ai["note"])
-            for c in found:
-                if c.get("shots"):
-                    c["shots"] = timeutil.shift_shots(c["shots"], shift)
-                c.update(id=f"clip{len(job['clips']) + 1:02d}", start=round(c["start"] + shift, 2),
-                         end=round(c["end"] + shift, 2), style=o["style"], layout=o["layout"], status="queued", version=0)
+            tokens += ai_meta.get("tokens", 0)
+            model = ai_meta.get("model") or model
+            if ai_meta.get("note"):
+                notes.append(ai_meta["note"])
+            job["clips"] = []
+            for idx, c in enumerate(found):
+                if c.get("shots") and shift0 > 0:
+                    c["shots"] = timeutil.shift_shots(c["shots"], shift0)
+                c.update(
+                    id=f"clip{idx + 1:02d}",
+                    start=round(c["start"] + shift0, 2),
+                    end=round(c["end"] + shift0, 2),
+                    style=o["style"],
+                    layout=o["layout"],
+                    status="queued",
+                    version=0,
+                )
                 job["clips"].append(c)
-                futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
             job["ai"] = {"model": model, "tokens": tokens, "note": "", "log": notes[-5:]}
-            job["done_blocks"] = bi + 1       # a restart from here on carries on with the next part
             save(job)
+
         shutil.rmtree(d / "snapshots", ignore_errors=True)
+        # Phase 4: Render only the globally winning clips (or resume unfinished clips).
+        for c in job["clips"]:
+            if c.get("status") not in ("done", "error"):
+                c["status"] = "queued"
+                futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
         if futures:
-            _set(job, stage="Finishing the clips", progress=max(job["progress"], 0.92))
+            save(job)
+            _set(job, stage="Finishing the clips", progress=max(job["progress"], 0.86))
         _wait_for_clips(job, futures, began, renders._max_workers, sctx=sctx)
         _chk_cancel()
         if job["clips"]:

@@ -365,3 +365,154 @@ def extract_snapshots(video_path: Path, out_dir: Path, start: float = 0.0, end: 
     except Exception:
         return []
 
+
+def scan_frame_metrics(
+    video_path: Path,
+    start: float = 0.0,
+    end: float = 0.0,
+    interval_sec: float = 3.0,
+    max_frames: int = 300,
+    on_progress=None,
+    should_cancel=None,
+) -> list:
+    """Stream downscaled 160x90 frames across [start, end] to compute motion, blur, edges, and scene boundaries.
+    Keeps RAM bounded by discarding each RGB buffer as soon as metrics are extracted."""
+    if not video_path or not Path(video_path).is_file():
+        return []
+    start = max(0.0, float(start))
+    end = float(end)
+    if end <= start:
+        try:
+            meta = probe(Path(video_path))
+            end = float(meta.get("duration") or 0.0)
+        except Exception:
+            return []
+    dur = end - start
+    if dur < 0.5:
+        return []
+
+    w, h = 160, 90
+    frame_bytes = w * h * 3
+    step = max(0.2, float(interval_sec), dur / max(1, int(max_frames)))
+    fps_val = 1.0 / step
+
+    det = None
+    try:
+        from .pipeline.stages.analyze_snapshots import get_face_detector
+        cand = get_face_detector()
+        if cand and cand.available:
+            det = cand
+    except Exception:
+        det = None
+
+    est_frames = int(dur / step) + 1
+    face_stride = 1 if est_frames <= 120 else 2
+
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-ss", f"{start:.2f}", "-t", f"{dur:.2f}",
+        "-i", str(video_path),
+        "-vf", f"fps={fps_val:.6f},scale={w}:{h}",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW,
+    )
+    results = []
+    prev_gray = None
+    idx = 0
+    try:
+        stdout = proc.stdout
+        if stdout is None:
+            return []
+        while idx < int(max_frames) + 2:
+            if should_cancel and should_cancel():
+                break
+            chunk = stdout.read(frame_bytes)
+            if not chunk or len(chunk) < frame_bytes:
+                break
+            rgb = np.frombuffer(chunk, dtype=np.uint8).reshape((h, w, 3))
+            gray = (
+                0.299 * rgb[:, :, 0].astype(np.float32)
+                + 0.587 * rgb[:, :, 1].astype(np.float32)
+                + 0.114 * rgb[:, :, 2].astype(np.float32)
+            )
+            brightness = round(float(gray.mean()), 2)
+            lap = (
+                gray[:-2, 1:-1]
+                + gray[2:, 1:-1]
+                + gray[1:-1, :-2]
+                + gray[1:-1, 2:]
+                - 4.0 * gray[1:-1, 1:-1]
+            )
+            blur = round(float(lap.var()), 2)
+            blurriness = round(max(0.0, 1.0 - min(blur, 500.0) / 500.0), 4)
+            gx = np.abs(gray[1:-1, 2:] - gray[1:-1, :-2])
+            gy = np.abs(gray[2:, 1:-1] - gray[:-2, 1:-1])
+            mag = 0.5 * (gx + gy)
+            edge_density = round(float((mag > 25.0).mean()), 4)
+
+            if prev_gray is not None:
+                motion = round(float(np.abs(gray - prev_gray).mean() / 255.0), 4)
+            else:
+                motion = 0.0
+            prev_gray = gray
+            is_scene_boundary = bool(idx > 0 and motion >= 0.16)
+
+            faces = None
+            largest_face_box = None
+            if det is not None and (idx % face_stride == 0):
+                try:
+                    boxes = det.detect(rgb)
+                    if boxes is not None:
+                        faces = len(boxes)
+                        largest_face_box = max(boxes, key=lambda b: b[2] * b[3]) if boxes else None
+                except Exception:
+                    faces = None
+                    largest_face_box = None
+
+            ts = round(start + idx * step, 2)
+            results.append({
+                "timestamp": ts,
+                "time": ts,
+                "brightness": brightness,
+                "blur": blur,
+                "blurriness": blurriness,
+                "edge_density": edge_density,
+                "motion": motion,
+                "is_scene_boundary": is_scene_boundary,
+                "faces": faces,
+                "largest_face_box": largest_face_box,
+            })
+            if on_progress and (idx % 5 == 0):
+                try:
+                    on_progress(min(1.0, (ts - start) / max(0.1, dur)))
+                except Exception:
+                    pass
+            idx += 1
+    finally:
+        if proc.stdout:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        else:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+    return results
+
+

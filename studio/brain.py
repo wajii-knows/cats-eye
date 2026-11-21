@@ -101,7 +101,12 @@ Rules:
 - focus_score: 0-100, single clean beat (90+ one unmistakable idea/emotion; <60 tries to do 2-3 things).
 - clarity_score: 0-100, stranger clarity + works on mute (90+ any stranger gets it in 2s; <60 needs insider context).
 - score: 0-100, calibrated overall viral score (85-100 = 1M+ Stranger-ready; 70-84 = 100K+ Good for audience; 55-69 = Followers only; <55 = weak, skip).
-- hook: at most 5 words, ALL CAPS, shown as big text on the seam banner so the clip works on mute. When clipping a streamer, write a 3rd-person Parasocial Story Hook (e.g. "SPEED COULDN'T BELIEVE THIS", "TECHNO FOUND A SECRET JET", "BRO BROKE THE GAME"). Curiosity, true to what happens.
+- hook: 3 to 7 words, ALL CAPS, shown as the big scroll-stopper banner on the seam so the clip works on mute. When clipping a streamer, write a 3rd-person Parasocial Story Hook (e.g. "SPEED COULDN'T BELIEVE THIS", "TECHNO FOUND A SECRET JET", "BRO BROKE THE GAME"). Pick the strongest viral hook archetype:
+  1. Warning / Negative Command: "NEVER OPEN THIS TRUNK IN GTA 6"
+  2. Hidden Detail / Pixel-Peep: "99% MISSED THIS INSANE DETAIL"
+  3. Reality / Physics Shock: "THESE PHYSICS ARE UNREAL"
+  4. World's First / Stunt: "WORLD'S FIRST JET HEIST"
+  5. Era / Cultural Meme: "2013 VS 2026 GRAPHICS"
 - title: at most 70 characters, for the post.
 - description: one or two sentences.
 - hashtags: 5 tags without the # sign.
@@ -125,13 +130,18 @@ Never put links, @handles, phone numbers, or "visit / buy / subscribe" calls in 
 
 
 CATEGORIES = {"funny", "fail", "clutch", "rage", "shock", "take", "story", "other"}
-SHOT_TYPES = {"wide", "close", "crop", "zoom", "split"}
+SHOT_TYPES = {"wide", "close", "crop", "zoom", "split", "split_zoom"}
 _CTRL = re.compile(r"[\x00-\x1f\x7f]+")
 _LINKS = re.compile(r"(?i)(?:https?://|www\.)\S+|\b[\w-]+\.(?:com|net|org|io|gg|tv|ly|me|co|xyz|app|link|shop)\b\S*|@\w+")
 _HOOK_CUES = re.compile(
     r"(?i)\b(wait|stop|watch|look|bro|what|why|how|never|no\s+way|hold\s+on|actually|secret|crazy|insane|wtf|"
     r"did\s+you|are\s+you|nobody|everyone|listen|hear\s+me\s+out|trust\s+me|imagine|ruined|impossible|first\s+time|"
     r"worst|best|dead|killed|clutched|banned|yaar|bhai|kya|abey|dekho|suno)\b"
+)
+_GAMING_VIRAL_CUES = re.compile(
+    r"(?i)\b(physics|graphics|realistic|real\s+life|detail|npc|easter\s+egg|secret|hidden|"
+    r"before\s+gta|world'?s\s+first|unplayable|glitched|busted|wasted|6\s+stars|vice\s+city|"
+    r"lucia|jason|rockstar|compare|comparison|vs|fake\s+or\s+real|ai\s+or\s+real)\b"
 )
 _PREAMBLE_CUES = re.compile(
     r"(?i)\b(hey\s+guys|what'?s\s+up\s+guys|welcome\s+back|so\s+anyway|in\s+today'?s\s+video|"
@@ -144,8 +154,34 @@ _MULTI_BEAT_CUES = re.compile(
 _INSIDER_CUES = re.compile(
     r"(?i)\b(yesterday'?s\s+stream|last\s+stream|remember\s+last\s+week|as\s+i\s+said\s+earlier|"
     r"told\s+chat\s+earlier|in\s+the\s+discord|channel\s+members|part\s+two|part\s+2|if\s+you\s+watched\s+yesterday|"
-    r"regulars\s+know)\b"
+    r"regulars\s+know|ask\s+the\s+chat|tell\s+chat|chat\s+what\s+do\s+we|what\s+do\s+we\s+need\s+to\s+do|"
+    r"how\s+do\s+i\s+start|reading\s+chat|mods\s+ban|sub\s+goal|gifted\s+subs?)\b"
 )
+_PROFANITY_RULES = (
+    (re.compile(r"(?i)\bmotherfuck\w*\b"), "m*********"),
+    (re.compile(r"(?i)\bfuck\w*\b"), "f***"),
+    (re.compile(r"(?i)\bshit\w*\b"), "s***"),
+    (re.compile(r"(?i)\bbitch\w*\b"), "b***h"),
+    (re.compile(r"(?i)\basshole\w*\b"), "a******"),
+    (re.compile(r"(?i)\bnigg\w*\b"), "n****"),
+    (re.compile(r"(?i)\bfagg\w*\b"), "f****"),
+    (re.compile(r"(?i)\bcunt\w*\b"), "c***"),
+)
+
+
+def censor_profanity(text: str) -> str:
+    """Mask explicit profanity and severe slurs for on-screen captions and hook banners."""
+    s = str(text or "")
+    for rx, mask in _PROFANITY_RULES:
+        def _repl(m, mask=mask):
+            tok = m.group(0)
+            if tok.isupper():
+                return mask.upper()
+            if tok[0].isupper():
+                return mask[0].upper() + mask[1:]
+            return mask
+        s = rx.sub(_repl, s)
+    return s
 _TWIST_CUES = re.compile(
     r"(?i)\b(plot\s+twist|turns\s+out|until|little\s+did|thought\s+he|thought\s+i|instead|"
     r"instantly\s+regretted|out\s+of\s+nowhere|right\s+when|suddenly|except)\b"
@@ -272,8 +308,8 @@ def _score_tier(score: int) -> str:
     return "viral" if score >= 85 else "strong" if score >= 70 else "good" if score >= 55 else "weak"
 
 
-def _audience_reach(score: int, hook: int, clarity: int, has_insider: bool = False) -> str:
-    if score >= 85 and hook >= 78 and clarity >= 70 and not has_insider:
+def _audience_reach(score: int, hook: int, clarity: int, has_insider: bool = False, shareability: int = 100, payoff: int = 100) -> str:
+    if score >= 85 and hook >= 78 and clarity >= 70 and shareability >= 70 and payoff >= 68 and not has_insider:
         return "1M+ Strangers"
     if score >= 70:
         return "100K+ Audience"
@@ -290,7 +326,64 @@ def _has_loud_spike(db_z, t0: float, t1: float, thresh: float = 1.5) -> bool:
     return a < b and float(np.max(db_z[a:b])) >= thresh
 
 
-def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len: int = 15, max_len: int = 35) -> dict:
+def _visual_subscores(s: float, e: float, visual_snaps: list | None) -> dict:
+    """Compute objective visual hook, pacing, payoff, clarity, and static-frame penalty across [s, e]."""
+    neutral = {"v_hook": 0.0, "v_pacing": 0.0, "v_payoff": 0.0, "v_clarity": 0.0, "is_static": False, "max_motion": 0.0}
+    if not visual_snaps:
+        return neutral
+    clip_snaps = [
+        sn for sn in visual_snaps
+        if isinstance(sn, dict) and s - 0.5 <= float(sn.get("timestamp", sn.get("time", -1))) <= e + 0.5
+    ]
+    if not clip_snaps:
+        return neutral
+
+    motion_vals = [
+        float(sn.get("motion") or 0.0)
+        for sn in clip_snaps
+        if float(sn.get("timestamp", sn.get("time", 0.0))) > 0.1 or float(sn.get("motion") or 0.0) > 0.0
+    ]
+    max_motion = max(motion_vals, default=0.0)
+    if len(motion_vals) >= 2 and (sum(motion_vals) / len(motion_vals)) < 0.008 and max_motion < 0.02:
+        return {
+            "v_hook": -14.0,
+            "v_pacing": -16.0,
+            "v_payoff": -10.0,
+            "v_clarity": 0.0,
+            "is_static": True,
+            "max_motion": max_motion,
+        }
+
+    open_snaps = [sn for sn in clip_snaps if float(sn.get("timestamp", sn.get("time", s))) <= s + 2.5] or clip_snaps[:2]
+    late_snaps = [sn for sn in clip_snaps if float(sn.get("timestamp", sn.get("time", s))) >= s + 0.6 * (e - s)] or clip_snaps[-2:]
+
+    open_motion = max((float(sn.get("motion") or 0.0) for sn in open_snaps), default=0.0)
+    open_edges = max((float(sn.get("edge_density") or 0.0) for sn in open_snaps), default=0.0)
+    open_faces = max((int(sn.get("faces") or 0) for sn in open_snaps), default=0)
+    v_hook = min(18.0, open_motion * 45.0 + open_edges * 60.0 + (5.0 if open_faces >= 1 else 0.0))
+
+    scene_cuts = sum(1 for sn in clip_snaps if sn.get("is_scene_boundary"))
+    mean_motion = (sum(motion_vals) / len(motion_vals)) if motion_vals else 0.0
+    v_pacing = min(15.0, scene_cuts * 2.5 + mean_motion * 35.0)
+
+    late_motion = max((float(sn.get("motion") or 0.0) for sn in late_snaps), default=0.0)
+    late_thumb = max((float((sn.get("caption") or {}).get("is_good_thumbnail") or 0.0) for sn in late_snaps), default=0.0)
+    v_payoff = min(16.0, late_motion * 40.0 + late_thumb * 10.0)
+
+    mean_blur = sum(float(sn.get("blurriness") or 0.0) for sn in clip_snaps) / len(clip_snaps)
+    v_clarity = 10.0 if mean_blur <= 0.20 else (4.0 if mean_blur <= 0.40 else -8.0)
+
+    return {
+        "v_hook": v_hook,
+        "v_pacing": v_pacing,
+        "v_payoff": v_payoff,
+        "v_clarity": v_clarity,
+        "is_static": False,
+        "max_motion": max_motion,
+    }
+
+
+def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len: int = 15, max_len: int = 35, visual_snaps=None) -> dict:
     """Calibrated viral scoring across the 6 pillars of a 1M+ stranger-ready clip:
     1. hook (wins the first 1-2s: mid-action, bold claim, open question, zero intro)
     2. pacing (completion & rewatch: short, tight, end-loaded payoff, seamless loop)
@@ -302,6 +395,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     dur = max(0.5, e - s)
     cwords = [w for w in (words or []) if float(w.get("e", 0.0)) >= s - 0.05 and float(w.get("s", 0.0)) <= e + 0.05]
     full_text = " ".join(str(w.get("w", "")) for w in cwords)
+    vis = _visual_subscores(s, e, visual_snaps)
+    has_visual = bool(visual_snaps)
 
     seg_z = open_z = np.empty(0)
     has_audio = False
@@ -338,7 +433,7 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_hook += 13.0
     elif onset_delay <= 1.4:
         obj_hook += 4.0
-    else:
+    elif not (vis["max_motion"] >= 0.14):
         obj_hook -= 14.0
 
     open_peak = float(np.max(open_z)) if has_audio else 0.0
@@ -355,15 +450,23 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_hook += 14.0
 
     cue_hits = len(_HOOK_CUES.findall(open_text)) + (1 if ("?" in open_text or "!" in open_text) else 0)
+    g_open = len(_GAMING_VIRAL_CUES.findall(open_text))
     obj_hook += (10.0 if cue_hits >= 1 else 0.0) + (6.0 if cue_hits >= 2 else 0.0) + (4.0 if cue_hits >= 3 else 0.0)
+    if g_open:
+        obj_hook += min(8.0, g_open * 5.0)
     if len(first_2s_words) >= 3 or len(open_words) >= 4:
         obj_hook += 10.0
     elif len(open_words) >= 2:
         obj_hook += 5.0
-    elif not open_words and open_peak < 1.8:
-        obj_hook -= 16.0
+    elif not open_words:
+        if vis["max_motion"] >= 0.14 or open_peak >= 1.8:
+            obj_hook += 16.0
+        else:
+            obj_hook -= 16.0
     if has_preamble:
         obj_hook -= 26.0
+    if has_visual:
+        obj_hook += vis["v_hook"]
     obj_hook = max(10.0, min(98.0, obj_hook))
 
     # 2. Pacing, completion & seamless loop score
@@ -384,8 +487,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             dead_sec += (head_gap - 0.5)
         dead_ratio = dead_sec / dur
     else:
-        tail_gap = dur
-        dead_ratio = 0.25
+        tail_gap = 0.2 if vis["max_motion"] >= 0.12 else dur
+        dead_ratio = 0.05 if (vis["max_motion"] >= 0.12 or (has_audio and float(np.max(seg_z)) >= 1.8)) else 0.25
 
     end_loaded = False
     if has_audio and len(seg_z) >= 4:
@@ -400,8 +503,11 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     )
 
     wps = len(cwords) / dur
+    is_action_micro = (wps < 1.0) and (open_peak >= 1.4 or vis["max_motion"] >= 0.12)
     obj_pacing = 12.0
-    if 14.0 <= dur <= 32.0:
+    if is_action_micro and 8.0 <= dur <= 16.0:
+        obj_pacing += 32.0
+    elif 14.0 <= dur <= 32.0:
         obj_pacing += 32.0
     elif 10.0 <= dur < 14.0:
         obj_pacing += 26.0
@@ -420,6 +526,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_pacing += 18.0
     elif 0.7 <= wps < 1.3:
         obj_pacing += 8.0
+    elif is_action_micro:
+        obj_pacing += 22.0
 
     if cwords:
         if dead_ratio <= 0.06:
@@ -430,6 +538,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_pacing += 3.0
         else:
             obj_pacing -= 10.0
+    elif is_action_micro:
+        obj_pacing += 16.0
     elif has_audio and float(np.std(seg_z)) >= 0.8:
         obj_pacing += 6.0
 
@@ -439,6 +549,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_pacing += 3.0
     if loop_seamless:
         obj_pacing += 5.0
+    if has_visual:
+        obj_pacing += vis["v_pacing"]
     obj_pacing = max(10.0, min(98.0, obj_pacing))
 
     # 3. Payoff & fresh twist score (end climax, dynamic contrast, expectation twist)
@@ -467,6 +579,8 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_payoff += 14.0
         elif end_gap > 2.2 and not _has_loud_spike(db_z, float(cwords[-1]["e"]), e):
             obj_payoff -= 10.0
+    if has_visual:
+        obj_payoff += vis["v_payoff"]
     obj_payoff = max(10.0, min(98.0, obj_payoff))
 
     # 4. Share & comment trigger score (relatability, controversy, awe, 'wait, what?!')
@@ -478,6 +592,7 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             archetype_hits += len(m)
             if not detected_trigger:
                 detected_trigger = label
+    g_full = len(_GAMING_VIRAL_CUES.findall(full_text))
     exclam_q = full_text.count("!") + full_text.count("?")
     obj_share = 24.0
     if archetype_hits >= 3:
@@ -486,6 +601,10 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
         obj_share += 28.0
     elif archetype_hits == 1:
         obj_share += 18.0
+    if g_full:
+        obj_share += min(12.0, g_full * 6.0)
+        if not detected_trigger:
+            detected_trigger = "Gaming spectacle"
     if exclam_q >= 2:
         obj_share += 14.0
     elif exclam_q == 1:
@@ -499,6 +618,10 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_share += 12.0
     else:
         obj_share += 12.0
+    if vis["max_motion"] >= 0.14 or vis["v_payoff"] >= 10.0:
+        obj_share += 12.0
+        if not detected_trigger:
+            detected_trigger = "Visual spectacle"
     if has_preamble or has_insider:
         obj_share -= 18.0
     obj_share = max(10.0, min(98.0, obj_share))
@@ -511,7 +634,7 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     if dead_ratio <= 0.06 and topic_pivots == 0 and 14.0 <= dur <= 30.0:
         obj_focus += 6.0
     if not cwords:
-        obj_focus = 50.0
+        obj_focus = 80.0 if (8.0 <= dur <= 18.0 and (vis["max_motion"] >= 0.12 or peak_z >= 1.8)) else 50.0
     obj_focus = max(10.0, min(98.0, obj_focus))
 
     # 6. Stranger Clarity & Works-on-Mute score
@@ -529,9 +652,13 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             obj_clarity += 8.0
         elif f_ratio > 0.25:
             obj_clarity -= 10.0
+    elif vis["v_clarity"] >= 4.0 or peak_z >= 2.0:
+        obj_clarity = max(obj_clarity, 64.0)
     if has_insider:
         obj_clarity -= 26.0
-    obj_clarity = max(10.0, min(78.0, obj_clarity))
+    if has_visual:
+        obj_clarity += vis["v_clarity"]
+    obj_clarity = max(10.0, min(84.0 if has_visual else 78.0, obj_clarity))
 
     # Blend with AI sub-scores (when present) and enforce hard dead-air / bloat / stranger-test ceilings
     ai_raw = ai_clip if isinstance(ai_clip, dict) else {}
@@ -550,12 +677,16 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     focus = (0.50 * ai_fo + 0.50 * obj_focus) if ai_fo >= 0.0 else obj_focus
     clarity = (0.70 * ai_cl + 0.30 * obj_clarity) if ai_cl >= 0.0 else obj_clarity
 
-    if onset_delay > 2.5:
+    if onset_delay > 2.5 and not (vis["max_motion"] >= 0.14):
         hook = min(hook, 40.0)
-    elif onset_delay > 1.5:
+    elif onset_delay > 1.5 and not (vis["max_motion"] >= 0.14):
         hook = min(hook, 55.0)
     if has_preamble:
         hook = min(hook, 52.0)
+    if vis["is_static"]:
+        hook = min(hook, 58.0)
+        pacing = min(pacing, 58.0)
+        payoff = min(payoff, 58.0)
     if dur > 48.0:
         pacing = min(pacing, 66.0)
         focus = min(focus, 60.0)
@@ -570,6 +701,10 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     total = 0.30 * ih + 0.18 * ip + 0.20 * iy + 0.12 * ish + 0.10 * ifo + 0.10 * ic
     if dur > 45.0:
         total -= min(18.0, (dur - 45.0) * 0.9)
+    if vis["is_static"]:
+        total = min(total, 55.0)
+    if ish < 55 and not (vis["v_payoff"] >= 10.0 or vis["max_motion"] >= 0.14):
+        total = min(total, 72.0)
     # "If viewers leave early, nothing else matters": a failed 0-2s hook caps the entire clip
     if ih < 50:
         total = min(total, float(ih + 12))
@@ -577,10 +712,12 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
 
     ss_raw = ai_raw.get("scroll_stopper")
     if ss_raw:
-        ss = roman.to_roman(_text(ss_raw, 90))
-    else:
+        ss = censor_profanity(roman.to_roman(_text(ss_raw, 90)))
+    elif cwords:
         sample = open_words[:10] if open_words else cwords[:8]
-        ss = roman.to_roman(_text(" ".join(str(w.get("w", "")) for w in sample), 90))
+        ss = censor_profanity(roman.to_roman(_text(" ".join(str(w.get("w", "")) for w in sample), 90)))
+    else:
+        ss = "Pure visual / action moment"
 
     st_raw = ai_raw.get("share_trigger")
     share_trig = roman.to_roman(_text(st_raw, 45)) if st_raw else (detected_trigger or ("High energy moment" if score_i >= 70 else ""))
@@ -598,30 +735,69 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
             "clarity": ic,
         },
         "tier": _score_tier(score_i),
-        "audience_reach": _audience_reach(score_i, ih, ic, has_insider=has_insider),
+        "audience_reach": _audience_reach(score_i, ih, ic, has_insider=has_insider, shareability=ish, payoff=iy),
         "scroll_stopper": ss,
         "share_trigger": share_trig,
         "loop_seamless": loop_seamless,
     }
 
 
+def _dedupe_hook_tokens(cands: list) -> list:
+    tokens, keys = [], []
+    for w in cands:
+        raw = str(w.get("w", "")).strip()
+        k = re.sub(r"[^a-z0-9']", "", raw.lower())
+        if not raw or not k:
+            continue
+        if keys and k == keys[-1]:
+            continue
+        tokens.append(raw)
+        keys.append(k)
+    out_t, out_k = [], []
+    i = 0
+    while i < len(tokens):
+        if len(out_k) >= 2 and i + 1 < len(keys) and keys[i] == out_k[-2] and keys[i + 1] == out_k[-1]:
+            i += 2
+            continue
+        if len(out_k) >= 2 and keys[i] == out_k[-2] and i == len(keys) - 1:
+            i += 1
+            continue
+        out_t.append(tokens[i])
+        out_k.append(keys[i])
+        i += 1
+    return out_t
+
+
 def _auto_hook(clip_words, s: float, e: float, db_z=None) -> tuple:
     """Build a spoken-word hook & short title from the opening/peak lines instead of a canned string."""
-    cand = [w for w in clip_words if float(w.get("s", 0.0)) <= s + 4.5][:8]
+    cand = [w for w in clip_words if float(w.get("s", 0.0)) <= s + 4.5][:12]
     if len(cand) < 2 and clip_words:
         if db_z is not None and len(db_z) > int(math.floor(s)):
             i0 = max(0, int(math.floor(s)))
             i1 = min(len(db_z), max(i0 + 1, int(math.ceil(e))))
             peak_t = float(i0 + int(np.argmax(db_z[i0:i1]))) if i1 > i0 else s
-            cand = [w for w in clip_words if peak_t - 2.5 <= float(w.get("s", 0.0)) <= peak_t + 2.5][:8]
+            cand = [w for w in clip_words if peak_t - 2.5 <= float(w.get("s", 0.0)) <= peak_t + 2.5][:12]
         if len(cand) < 2:
-            cand = clip_words[:8]
-    stripped = list(cand)
-    while len(stripped) > 2 and re.sub(r"[^a-z]", "", str(stripped[0].get("w", "")).lower()) in _FILLER_WORDS:
-        stripped.pop(0)
-    hook_str = roman.to_roman(_text(" ".join(str(w.get("w", "")) for w in stripped[:5]), 45)).upper().strip(" ,;:")
-    title_str = roman.to_roman(_text(" ".join(str(w.get("w", "")) for w in stripped[:10]), 65)).strip()
-    return hook_str or "HIGH ENERGY MOMENT", title_str or "Highlight moment"
+            cand = clip_words[:12]
+    toks = _dedupe_hook_tokens(cand)
+    skip_single = _FILLER_WORDS | {"yo", "bro"}
+    while len(toks) >= 4:
+        k0 = re.sub(r"[^a-z0-9']", "", toks[0].lower())
+        k1 = re.sub(r"[^a-z0-9']", "", toks[1].lower()) if len(toks) > 1 else ""
+        k2 = re.sub(r"[^a-z0-9']", "", toks[2].lower()) if len(toks) > 2 else ""
+        if (k0, k1, k2) == ("wait", "a", "second") and len(toks) >= 6:
+            toks = toks[3:]
+        elif (k0, k1) in (("hold", "on"), ("wait", "a")) and len(toks) >= 5:
+            toks = toks[2:]
+        elif k0 in skip_single:
+            toks = toks[1:]
+        else:
+            break
+    hook_raw = " ".join(toks[:5])
+    title_raw = " ".join(toks[:10])
+    hook_str = censor_profanity(roman.to_roman(_text(hook_raw, 45))).upper().strip(" ,;:.")
+    title_str = censor_profanity(roman.to_roman(_text(title_raw, 65))).strip()
+    return hook_str or "INSANE ACTION MOMENT", title_str or "Highlight moment"
 
 
 def _tidy(c, s, e, words=None, db_slice=None, score_info=None):
@@ -636,8 +812,11 @@ def _tidy(c, s, e, words=None, db_slice=None, score_info=None):
         score_val = max(0, min(100, int(_num(score_info.get("score")))))
         scores_dict = dict(score_info.get("scores") or {})
         tier = str(score_info.get("tier") or _score_tier(score_val))
-        reach = str(score_info.get("audience_reach") or _audience_reach(score_val, scores_dict.get("hook", score_val), scores_dict.get("clarity", score_val)))
-        ss = roman.to_roman(_text(score_info.get("scroll_stopper"), 90))
+        reach = str(score_info.get("audience_reach") or _audience_reach(
+            score_val, scores_dict.get("hook", score_val), scores_dict.get("clarity", score_val),
+            shareability=scores_dict.get("shareability", 100), payoff=scores_dict.get("payoff", 100),
+        ))
+        ss = censor_profanity(roman.to_roman(_text(score_info.get("scroll_stopper"), 90)))
         st = roman.to_roman(_text(score_info.get("share_trigger"), 45))
         loop_ok = bool(score_info.get("loop_seamless", False))
     else:
@@ -652,15 +831,19 @@ def _tidy(c, s, e, words=None, db_slice=None, score_info=None):
             "clarity": max(0, min(100, int(_num(raw_sub.get("clarity", c.get("clarity_score", score_val)))))),
         }
         tier = str(c.get("tier") or _score_tier(score_val))
-        reach = str(c.get("audience_reach") or _audience_reach(score_val, scores_dict["hook"], scores_dict["clarity"]))
-        ss = roman.to_roman(_text(c.get("scroll_stopper"), 90))
+        reach = str(c.get("audience_reach") or _audience_reach(
+            score_val, scores_dict["hook"], scores_dict["clarity"],
+            shareability=scores_dict["shareability"], payoff=scores_dict["payoff"],
+        ))
+        ss = censor_profanity(roman.to_roman(_text(c.get("scroll_stopper"), 90)))
         st = roman.to_roman(_text(c.get("share_trigger"), 45))
         loop_ok = bool(c.get("loop_seamless", False))
     return {
         "start": s, "end": e, "score": score_val, "scores": scores_dict, "tier": tier,
         "audience_reach": reach, "scroll_stopper": ss, "share_trigger": st, "loop_seamless": loop_ok,
         "category": cat if cat in CATEGORIES else "other",
-        "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
+        "hook": censor_profanity(roman.to_roman(_text(c.get("hook"), 60))).upper(),
+        "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in hi_words][:8],
@@ -700,6 +883,49 @@ def make_lines(words, loud=None, chat=None):
             flush()
         cur.append(w)
     flush()
+    return lines
+
+
+def make_action_lines(db_z, visual_metrics=None) -> list:
+    """Generate timestamped non-verbal action markers from acoustic spikes and high-motion visual frames."""
+    lines = []
+    if db_z is not None and len(db_z):
+        i, n = 0, len(db_z)
+        while i < n:
+            if float(db_z[i]) >= 1.4:
+                s = float(i)
+                peak = float(db_z[i])
+                while i < n and float(db_z[i]) >= 0.8:
+                    peak = max(peak, float(db_z[i]))
+                    i += 1
+                e = float(i)
+                lines.append({
+                    "s": round(s, 2),
+                    "e": round(max(s + 1.0, e), 2),
+                    "text": f"[GAMEPLAY ACTION / AUDIO PEAK +{peak:.1f}σ]",
+                    "loud": True,
+                    "chat": False,
+                })
+            else:
+                i += 1
+    for sn in (visual_metrics or []):
+        if not isinstance(sn, dict):
+            continue
+        t = float(sn.get("timestamp", sn.get("time", -1.0)))
+        mot = float(sn.get("motion") or 0.0)
+        bnd = bool(sn.get("is_scene_boundary"))
+        if t < 0.0 or not (mot >= 0.14 or (bnd and mot >= 0.10)):
+            continue
+        if any(a["s"] - 2.0 <= t <= a["e"] + 2.0 for a in lines):
+            continue
+        lines.append({
+            "s": round(max(0.0, t - 1.0), 2),
+            "e": round(t + 2.0, 2),
+            "text": f"[VISUAL ACTION / HIGH MOTION {mot:.2f}]",
+            "loud": False,
+            "chat": False,
+        })
+    lines.sort(key=lambda l: l["s"])
     return lines
 
 
@@ -761,7 +987,9 @@ def _snap(clip, lines, words, min_len, max_len, duration, z=None):
     if w0 and w0["s"] - s > 0.35 and not _has_loud_spike(z, s, w0["s"]):
         if duration - w0["s"] >= min(min_len, duration) - 0.5:
             s = w0["s"]
-    lo, hi = s + min_len, min(s + max_len, duration)
+    has_words = any(s - 0.5 <= w["s"] <= e + 0.5 for w in words)
+    eff_min = min(min_len, 8) if not has_words else min_len
+    lo, hi = s + eff_min, min(s + max_len, duration)
     stops = [x for x in sentence_ends(words) if lo <= x <= hi]
     if stops:
         after = [x for x in stops if x >= e - 1.0]
@@ -770,7 +998,7 @@ def _snap(clip, lines, words, min_len, max_len, duration, z=None):
         ends = [w["e"] for w in words if lo <= w["e"] <= hi and abs(w["e"] - e) <= 4]
         if ends:
             e = min(ends, key=lambda x: abs(x - e))
-    e = max(e, s + min_len)
+    e = max(e, s + eff_min)
     e = min(e, s + max_len, duration)
     # a short breath after the last word, but never into the next sentence
     nxt = next((w["s"] for w in words if w["s"] > e - 0.01), None)
@@ -778,40 +1006,73 @@ def _snap(clip, lines, words, min_len, max_len, duration, z=None):
     return round(max(0.0, s - 0.12), 2), round(min(duration, e + tail), 2)
 
 
-def fallback_by_loudness(db, words, n, max_len, duration, min_len=15):
-    """No AI available: pick tight burst windows anchored near energy onset and score them objectively."""
+def fallback_by_loudness(db, words, n, max_len, duration, min_len=15, visual_metrics=None):
+    """No AI available: pick tight burst windows anchored near acoustic or visual-motion peaks."""
     z = loud_zscore(db)
     target_len = min(float(max_len), max(float(min_len), 25.0))
     if min_len <= 32:
         target_len = min(target_len, 32.0)
-    picks, order = [], np.argsort(-z)
+    micro_len = min(float(max_len), max(8.0, 12.0))
+
+    candidates = []
+    for sec in np.argsort(-z):
+        candidates.append((int(sec), False))
+    for sn in sorted(
+        (m for m in (visual_metrics or []) if isinstance(m, dict) and float(m.get("motion") or 0.0) >= 0.12),
+        key=lambda m: float(m.get("motion") or 0.0),
+        reverse=True,
+    ):
+        t_vis = float(sn.get("timestamp", sn.get("time", 0.0)))
+        if 0.0 <= t_vis < duration:
+            candidates.append((int(round(t_vis)), True))
+
+    picks = []
     pool_limit = max(int(n) * 3, 12)
-    for sec in order:
-        peak_sec = int(sec)
-        thresh = max(1.0, float(z[peak_sec]) * 0.45) if len(z) else 1.0
+    for peak_sec, is_vis in candidates:
+        peak_sec = max(0, min(max(0, len(z) - 1), peak_sec))
+        peak_z = float(z[peak_sec]) if len(z) else 0.0
         t_on = peak_sec
-        for k in range(max(0, peak_sec - 3), peak_sec + 1):
-            if float(z[k]) >= thresh:
-                t_on = k
-                break
+        if not is_vis and len(z):
+            thresh = max(1.0, peak_z * 0.45)
+            for k in range(max(0, peak_sec - 3), peak_sec + 1):
+                if float(z[k]) >= thresh:
+                    t_on = k
+                    break
         lead = min(2.5, target_len * 0.15)
         s = max(0.0, min(float(t_on) - lead, max(0.0, duration - target_len)))
         e = min(duration, s + target_len)
         cwords = [w for w in words if s <= w["s"] <= e]
         if not cwords:
-            continue
-        if float(cwords[0]["s"]) - s > 0.6 and not _has_loud_spike(z, s, float(cwords[0]["s"])):
+            prev_words = [w for w in words if max(0.0, float(t_on) - target_len + 4.0) <= w["s"] < s]
+            if prev_words:
+                s = max(0.0, float(prev_words[0]["s"]) - 0.2)
+                e = min(duration, s + target_len)
+                cwords = [w for w in words if s <= w["s"] <= e]
+            else:
+                s = max(0.0, min(float(t_on) - 2.0, max(0.0, duration - micro_len)))
+                e = min(duration, s + micro_len)
+                vis_win = _visual_subscores(s, e, visual_metrics)
+                if peak_z < 1.4 and vis_win["max_motion"] < 0.12:
+                    continue
+                cwords = [w for w in words if s <= w["s"] <= e]
+        elif float(cwords[0]["s"]) - s > 0.6 and not _has_loud_spike(z, s, float(cwords[0]["s"])):
             shifted_s = max(0.0, float(cwords[0]["s"]) - 0.2)
             if duration - shifted_s >= min(min_len, duration) - 0.5:
                 s = shifted_s
                 e = min(duration, s + target_len)
                 cwords = [w for w in words if s <= w["s"] <= e]
-                if not cwords:
+                if not cwords and peak_z < 1.4 and vis_win["max_motion"] < 0.12:
                     continue
         if any(not (e <= p["start"] or s >= p["end"]) for p in picks):
             continue
-        sc = score_clip(s, e, words=words, db_z=z, ai_clip=None, min_len=min_len, max_len=max_len)
-        hook, title = _auto_hook(cwords, s, e, z)
+        sc = score_clip(
+            s, e, words=words, db_z=z, ai_clip=None,
+            min_len=min_len, max_len=max_len, visual_snaps=visual_metrics,
+        )
+        if cwords:
+            hook, title = _auto_hook(cwords, s, e, z)
+        else:
+            hook, title = "INSANE ACTION MOMENT", "Action showcase"
         seg_z = z[int(s):int(e) + 1] if len(z) > int(s) else None
         picks.append({
             "start": round(s, 2), "end": round(e, 2),
@@ -820,7 +1081,7 @@ def fallback_by_loudness(db, words, n, max_len, duration, min_len=15):
             "share_trigger": sc["share_trigger"], "loop_seamless": sc["loop_seamless"],
             "category": "other", "hook": hook, "title": title, "description": "",
             "hashtags": [], "highlight_words": [],
-            "reason": f"Picked by audio energy & pacing (Hook {sc['scores']['hook']}, Payoff {sc['scores']['payoff']}).",
+            "reason": f"Picked by audio & visual energy (Hook {sc['scores']['hook']}, Payoff {sc['scores']['payoff']}).",
             "shots": plan_multishots(s, e, words=words, db_slice=seg_z) if flags.is_on("PEAKCUT_MULTISHOT") else [],
         })
         if len(picks) >= pool_limit:
@@ -829,11 +1090,17 @@ def fallback_by_loudness(db, words, n, max_len, duration, min_len=15):
     return picks[:n]
 
 
-def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=15, max_len=35, log=print, snapshots=None):
+def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=15, max_len=35, log=print, snapshots=None, visual_metrics=None):
     z = loud_zscore(db)
-    lines = make_lines(words, z)
+    speech_lines = make_lines(words, z)
+    action_lines = make_action_lines(z, visual_metrics=visual_metrics)
+    lines = list(speech_lines)
+    for al in action_lines:
+        if not any(not (al["e"] + 2.0 <= sl["s"] or al["s"] - 2.0 >= sl["e"]) for sl in speech_lines):
+            lines.append(al)
+    lines.sort(key=lambda l: l["s"])
     if not lines:
-        return [], {"model": None, "note": "No speech found."}
+        return [], {"model": None, "note": "No speech or action found."}
     found, used_model, tokens = [], None, 0
     t = 0.0
     windows = []
@@ -843,7 +1110,8 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
     per_window = max(2, min(8, int(np.ceil(max_clips * 1.5 / len(windows))) + 1))
     for a, b in windows:
         chunk = [l for l in lines if a <= l["s"] < b]
-        if len(chunk) < 3:
+        has_action = any("[GAMEPLAY ACTION" in l["text"] or "[VISUAL ACTION" in l["text"] for l in chunk)
+        if len(chunk) < 3 and not has_action:
             continue
         win_snaps = [s for s in (snapshots or []) if a <= s.get("time", 0.0) <= b] if flags.is_on("PEAKCUT_SNAPSHOTS") else []
         vnote = ""
@@ -854,6 +1122,14 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
             times_str = ", ".join(f"[{s['time']:.0f}s]" for s in sampled)
             vnote = f"\nAttached are periodic video snapshots taken at: {times_str}. Use visual action, faces, and scene changes alongside speech to judge moments."
             win_images = sampled
+        if visual_metrics:
+            win_peaks = [
+                f"[{float(m.get('timestamp', m.get('time', 0.0))):.0f}s mot={float(m.get('motion') or 0.0):.2f}]"
+                for m in visual_metrics
+                if a <= float(m.get("timestamp", m.get("time", -1.0))) <= b and float(m.get("motion") or 0.0) >= 0.12
+            ]
+            if win_peaks:
+                vnote += "\nHigh-motion visual peaks spotted at: " + ", ".join(win_peaks[:12]) + "."
         prompt = (HEAD.format(title=_safe(title) or "unknown", uploader=_safe(uploader) or "unknown", n=per_window, visual_note=vnote)
                   + RULES.format(min_len=min_len, max_len=max_len, transcript=_fmt(chunk)))
         try:
@@ -864,14 +1140,21 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
             log(f"AI window {a:.0f}-{b:.0f}s failed: {e}")
     note = ""
     if not used_model:
-        found = fallback_by_loudness(db, words, max_clips, max_len, duration, min_len=min_len)
+        found = fallback_by_loudness(
+            db, words, max_clips, max_len, duration, min_len=min_len, visual_metrics=visual_metrics,
+        )
         note = "The AI was unavailable, so clips were picked by loudness only."
     scored = []
     for c in found:
         s, e = _snap(c, lines, words, min_len, max_len, duration, z=z)
-        if e - s < min(min_len, duration) - 1:
+        has_words = any(s - 0.5 <= w["s"] <= e + 0.5 for w in words)
+        req_min = min(min_len, 8) if not has_words else min_len
+        if e - s < min(req_min, duration) - 1:
             continue
-        sc = score_clip(s, e, words=words, db_z=z, ai_clip=c if used_model else None, min_len=min_len, max_len=max_len)
+        sc = score_clip(
+            s, e, words=words, db_z=z, ai_clip=c if used_model else None,
+            min_len=min_len, max_len=max_len, visual_snaps=visual_metrics,
+        )
         scored.append((sc, c, s, e))
     scored.sort(key=lambda item: (-item[0]["score"], -item[0]["scores"]["hook"]))
     if used_model and scored:
@@ -887,7 +1170,7 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
         clips.append(_tidy(c, s, e, words=words, db_slice=seg_z, score_info=sc))
         if len(clips) >= max_clips:
             break
-    clips.sort(key=lambda c: c["start"])
+    clips.sort(key=lambda c: (-c["score"], -c["scores"]["hook"], c["start"]))
     return clips, {"model": used_model, "tokens": tokens, "note": note}
 
 

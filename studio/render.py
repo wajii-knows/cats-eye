@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import config, roman, timeutil
+from . import brain, config, flags, roman, timeutil
 from .media import NO_WINDOW, run
 
 W, H = config.OUT_W, config.OUT_H
@@ -18,6 +18,12 @@ STYLES = {
              "strong": "00D7FF", "outline": 7, "pop": 114, "upper": True, "per": 2},
     "clean": {"label": "Clean", "font": "Poppins ExtraBold", "size": 100, "base": "FFFFFF", "active": "6BD7FF",
               "strong": "FFFFFF", "outline": 5, "pop": 106, "upper": False, "per": 4},
+    "gta_viral": {"label": "GTA Viral", "font": "Archivo Black", "size": 148, "base": "FFFFFF", "active": "00EAFF",
+                  "strong": "40FF00", "outline": 9, "pop": 118, "upper": True, "per": 2,
+                  "hook_box": "00EAFF", "hook_ink": "0A0A0A"},
+    "vice_neon": {"label": "Vice Neon", "font": "Anton", "size": 150, "base": "FFFFFF", "active": "B469FF",
+                  "strong": "FFFF00", "outline": 8, "pop": 115, "upper": True, "per": 2,
+                  "hook_box": "140F1E", "hook_ink": "B469FF"},
 }
 HOOK = {"font": "Poppins ExtraBold", "size": 96, "ink": "14100E", "box": "FFFFFF", "pad_x": 36, "pad_y": 22, "radius": 26,
         "max_w": 900}
@@ -80,11 +86,13 @@ def install_fonts():
 
 FACECAM_CORNERS = {
     "cam_tl": (0.0, 0.0, 0.28, 0.32),    # Top-Left (Techno Gamerz, xQc)
-    "cam_tr": (0.72, 0.0, 0.28, 0.32),   # Top-Right (IShowSpeed, Kai Cenat)
+    "cam_tr": (0.72, 0.0, 0.28, 0.32),   # Top-Right (IShowSpeed)
+    "cam_ml": (0.0, 0.34, 0.24, 0.28),   # Mid-Left (Kai Cenat / chat below cam)
+    "cam_mr": (0.76, 0.34, 0.24, 0.28),  # Mid-Right
     "cam_bl": (0.0, 0.65, 0.28, 0.35),   # Bottom-Left
     "cam_br": (0.72, 0.65, 0.28, 0.35),  # Bottom-Right
 }
-FACECAM_LAYOUTS = ("facecam", "cam_tl", "cam_tr", "cam_bl", "cam_br")
+FACECAM_LAYOUTS = ("facecam", "cam_tl", "cam_tr", "cam_ml", "cam_mr", "cam_bl", "cam_br")
 COLOR_PUNCH = "eq=brightness=-0.02:contrast=1.06:saturation=1.18"
 
 LAYOUTS = {
@@ -188,6 +196,49 @@ def _corner_border_stats(stats: dict, is_left: bool, is_top: bool) -> tuple:
     return best_min_b, best_min_cov, best_w, best_h
 
 
+def _mid_side_border_stats(stats: dict, is_left: bool) -> tuple:
+    """Measure persistent 3-sided rectangular PiP border strength & coverage in mid-left or mid-right side zones."""
+    import numpy as np
+    fh, fw = stats["fh"], stats["fw"]
+    gx, gy, global_edge = stats["gx"], stats["gy"], stats["global_edge"]
+    best_rank = -1.0
+    best_min_b, best_min_cov = 0.0, 0.0
+    best_y, best_w, best_h = 0.34, 0.24, 0.26
+    for y_cand in (0.28, 0.32, 0.36, 0.40, 0.44):
+        for w_cand in (0.18, 0.21, 0.24, 0.28):
+            for h_cand in (0.18, 0.22, 0.26, 0.30):
+                if y_cand + h_cand > 0.78:
+                    continue
+                rx = 0.0 if is_left else 1.0 - w_cand
+                x0, x1 = int(round(rx * fw)), int(round((rx + w_cand) * fw))
+                y0, y1 = int(round(y_cand * fh)), int(round((y_cand + h_cand) * fh))
+                vx = x1 if is_left else x0
+                vx_idx = max(1, min(gx.shape[1] - 2, vx - 1))
+                ty_idx = max(1, min(gy.shape[0] - 2, y0 - 1))
+                by_idx = max(1, min(gy.shape[0] - 2, y1 - 1))
+                y_sl = slice(max(0, y0), min(gx.shape[0], y1))
+                x_sl = slice(max(0, x0), min(gy.shape[1], x1))
+                if y_sl.stop <= y_sl.start or x_sl.stop <= x_sl.start:
+                    continue
+                v_row = np.max(gx[y_sl, max(0, vx_idx - 2):min(gx.shape[1], vx_idx + 3)], axis=1)
+                t_col = np.max(gy[max(0, ty_idx - 2):min(gy.shape[0], ty_idx + 3), x_sl], axis=0)
+                b_col = np.max(gy[max(0, by_idx - 2):min(gy.shape[0], by_idx + 3), x_sl], axis=0)
+                ve = float(np.mean(v_row)) / global_edge
+                te = float(np.mean(t_col)) / global_edge
+                be = float(np.mean(b_col)) / global_edge
+                vc = float(np.mean(v_row > 1.2 * global_edge))
+                tc = float(np.mean(t_col > 1.2 * global_edge))
+                bc = float(np.mean(b_col > 1.2 * global_edge))
+                min_b = min(ve, te, be)
+                min_cov = min(vc, tc, bc)
+                rank = 0.6 * min_b + 1.4 * min_cov
+                if rank > best_rank:
+                    best_rank = rank
+                    best_min_b, best_min_cov = min_b, min_cov
+                    best_y, best_w, best_h = y_cand, w_cand, h_cand
+    return best_min_b, best_min_cov, best_y, best_w, best_h
+
+
 def analyze_framing_from_frames(frames: list) -> dict:
     """Analyze sampled frames to determine vertical framing mode without false-cropping empty corners.
     Returns {'mode': 'facecam'|'speaker_crop'|'wide', 'facecam_box': (x,y,w,h)|None, 'focus_x': float, 'face_count': int}."""
@@ -212,7 +263,7 @@ def analyze_framing_from_frames(frames: list) -> dict:
         det_faces_per_frame = []
 
     if det_available and det_faces_per_frame:
-        quad_obs = {"cam_tl": [], "cam_tr": [], "cam_bl": [], "cam_br": []}
+        quad_obs = {"cam_tl": [], "cam_tr": [], "cam_ml": [], "cam_mr": [], "cam_bl": [], "cam_br": []}
         main_faces = []
         for flist in det_faces_per_frame:
             for b in flist:
@@ -223,13 +274,17 @@ def analyze_framing_from_frames(frames: list) -> dict:
                 cx, cy = bx + 0.5 * bw, by + 0.5 * bh
                 q = None
                 if 0.002 <= area <= 0.14:
-                    if cx < 0.36 and cy < 0.42:
+                    if cx < 0.36 and cy < 0.34:
                         q = "cam_tl"
-                    elif cx > 0.64 and cy < 0.42:
+                    elif cx > 0.64 and cy < 0.34:
                         q = "cam_tr"
-                    elif cx < 0.36 and cy > 0.58:
+                    elif cx < 0.34 and 0.34 <= cy <= 0.64:
+                        q = "cam_ml"
+                    elif cx > 0.66 and 0.34 <= cy <= 0.64:
+                        q = "cam_mr"
+                    elif cx < 0.36 and cy > 0.64:
                         q = "cam_bl"
-                    elif cx > 0.64 and cy > 0.58:
+                    elif cx > 0.64 and cy > 0.64:
                         q = "cam_br"
                 if q:
                     quad_obs[q].append((bx, by, bw, bh, cx, cy))
@@ -252,22 +307,27 @@ def analyze_framing_from_frames(frames: list) -> dict:
             fcy = float(np.median([o[5] for o in obs]))
             fbw = float(np.median([o[2] for o in obs]))
             fbh = float(np.median([o[3] for o in obs]))
-            is_left = best_q in ("cam_tl", "cam_bl")
+            is_left = best_q in ("cam_tl", "cam_ml", "cam_bl")
+            is_mid = best_q in ("cam_ml", "cam_mr")
             is_top = best_q in ("cam_tl", "cam_tr")
-            min_b, min_cov, rw, rh = _corner_border_stats(stats, is_left, is_top)
+            if is_mid:
+                min_b, min_cov, ry, rw, rh = _mid_side_border_stats(stats, is_left)
+                rx = 0.0 if is_left else round(1.0 - rw, 4)
+            else:
+                min_b, min_cov, rw, rh = _corner_border_stats(stats, is_left, is_top)
+                rx = 0.0 if is_left else round(1.0 - rw, 4)
+                ry = 0.0 if is_top else round(1.0 - rh, 4)
 
-            # Reject wide multi-person bottom-corner faces that have no PiP border when other people sit beside them
+            # Reject wide multi-person bottom/mid-side faces without a PiP border when other people sit beside them
             same_row_mains = [m for m in main_faces if abs(m[5] - fcy) < 0.20]
             irl_multi = (not is_top) and bool(same_row_mains) and not (min_b >= 1.8 and min_cov >= 0.55)
             if not irl_multi:
-                rx = 0.0 if is_left else round(1.0 - rw, 4)
-                ry = 0.0 if is_top else round(1.0 - rh, 4)
                 border_encloses = (rx <= fcx <= rx + rw) and (ry <= fcy <= ry + rh)
                 if min_b >= 1.6 and min_cov >= 0.55 and border_encloses:
                     box = (rx, ry, rw, rh)
                 else:
-                    cw = round(max(0.24, min(0.36, fbw * 2.5)), 4)
-                    ch = round(max(0.26, min(0.38, fbh * 2.3)), 4)
+                    cw = round(max(0.22, min(0.36, fbw * 2.5)), 4)
+                    ch = round(max(0.22, min(0.38, fbh * 2.3)), 4)
                     cx = round(max(0.0, min(1.0 - cw, fcx - 0.5 * cw)), 4)
                     cy = round(max(0.0, min(1.0 - ch, fcy - 0.5 * ch)), 4)
                     box = (cx, cy, cw, ch)
@@ -282,7 +342,7 @@ def analyze_framing_from_frames(frames: list) -> dict:
             if med_faces >= 2:
                 return {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": med_faces}
 
-    # 2. Strict Zero-CV corner webcam detector (requires BOTH continuous L-border AND inner skin face + brightness)
+    # 2. Strict Zero-CV corner & mid-side webcam detector (requires continuous PiP border + inner skin + brightness)
     fh, fw = stats["fh"], stats["fw"]
     mean_gray, mean_skin = stats["mean_gray"], stats["mean_skin"]
     center_skin = stats["center_skin"]
@@ -291,16 +351,22 @@ def analyze_framing_from_frames(frames: list) -> dict:
     best_score = -1e9
     for key, (cx0, cy0, _cw0, _ch0) in FACECAM_CORNERS.items():
         is_left = cx0 < 0.5
-        is_top = cy0 < 0.5
-        min_b, min_cov, refined_w, refined_h = _corner_border_stats(stats, is_left, is_top)
+        is_mid = key in ("cam_ml", "cam_mr")
+        is_top = key in ("cam_tl", "cam_tr")
+        if is_mid:
+            min_b, min_cov, ry, refined_w, refined_h = _mid_side_border_stats(stats, is_left)
+            rx = 0.0 if is_left else round(1.0 - refined_w, 4)
+            b_thresh, cov_thresh = 2.2, 0.65
+        else:
+            min_b, min_cov, refined_w, refined_h = _corner_border_stats(stats, is_left, is_top)
+            rx = 0.0 if is_left else round(1.0 - refined_w, 4)
+            ry = 0.0 if is_top else round(1.0 - refined_h, 4)
+            b_thresh = 1.5 if is_top else 2.0
+            cov_thresh = 0.55 if is_top else 0.70
 
-        b_thresh = 1.5 if is_top else 2.0
-        cov_thresh = 0.55 if is_top else 0.70
         if min_b < b_thresh or min_cov < cov_thresh:
             continue
 
-        rx = 0.0 if is_left else round(1.0 - refined_w, 4)
-        ry = 0.0 if is_top else round(1.0 - refined_h, 4)
         x0, x1 = int(round(rx * fw)), int(round((rx + refined_w) * fw))
         y0, y1 = int(round(ry * fh)), int(round((ry + refined_h) * fh))
         pw, ph = max(4, x1 - x0), max(4, y1 - y0)
@@ -411,8 +477,10 @@ def geometry(src_w, src_h, layout):
     return layout, fg_h, max(230, top - 190), min(1640, top + fg_h + 180)
 
 
-def _hook_events(hook, dur, y):
-    """The heading: dark text in a white rounded box that fits it, on one line or two balanced ones."""
+def _hook_events(hook, dur, y, style_name="bounce"):
+    """The heading: styled text in a rounded pill box that fits it, on one line or two balanced ones."""
+    st = STYLES.get(style_name, STYLES["bounce"])
+    hook_box = st.get("hook_box", HOOK["box"])
     f, size = _Font.get(HOOK["font"]), HOOK["size"]
     words = hook.split()
     if not words:
@@ -435,15 +503,44 @@ def _hook_events(hook, dur, y):
            f"l {n(x0 + r)} {n(y1)} b {n(x0)} {n(y1)} {n(x0)} {n(y1)} {n(x0)} {n(y1 - r)} "
            f"l {n(x0)} {n(y0 + r)} b {n(x0)} {n(y0)} {n(x0)} {n(y0)} {n(x0 + r)} {n(y0)}")
     span = f"{_ts(0)},{_ts(dur)}"
-    ev = [f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\fad(160,0)\\c&H{HOOK['box']}&\\p1}}{box}{{\\p0}}"]
+    ev = [f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\fad(160,0)\\c&H{hook_box}&\\p1}}{box}{{\\p0}}"]
     for i, line in enumerate(lines):
         cy = y - line_h * (len(lines) - 1) / 2 + i * line_h - f.cap_shift(size)
         ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({W // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y) -> str:
+def _pill_events(label: str, dur: float, y: float, box_col: str = "14100E", ink_col: str = "FFFFFF") -> list:
+    """Corner pill badge used for A/B split-screen comparisons (e.g. 'GTA 5 (2013)' vs 'GTA 6 (2026)')."""
+    text = _clean(label)
+    if not text:
+        return []
+    f, size = _Font.get(HOOK["font"]), 54
+    tw = min(680, f.width(text, size))
+    if f.width(text, size) > 680:
+        size = max(32, int(size * 680 / max(1, f.width(text, size))))
+        tw = f.width(text, size)
+    pad_x, pad_y, rad = 24, 14, 18
+    bw, bh = tw + 2 * pad_x, f.em(size) * 1.15 + 2 * pad_y
+    cx = 44 + bw / 2
+    x0, y0, r = cx - bw / 2, y - bh / 2, min(rad, bh / 2)
+    x1, y1 = x0 + bw, y0 + bh
+    n = lambda v: f"{v:.0f}"                                                         # noqa: E731
+    box = (f"m {n(x0 + r)} {n(y0)} l {n(x1 - r)} {n(y0)} b {n(x1)} {n(y0)} {n(x1)} {n(y0)} {n(x1)} {n(y0 + r)} "
+           f"l {n(x1)} {n(y1 - r)} b {n(x1)} {n(y1)} {n(x1)} {n(y1)} {n(x1 - r)} {n(y1)} "
+           f"l {n(x0 + r)} {n(y1)} b {n(x0)} {n(y1)} {n(x0)} {n(y1)} {n(x0)} {n(y1 - r)} "
+           f"l {n(x0)} {n(y0 + r)} b {n(x0)} {n(y0)} {n(x0)} {n(y0)} {n(x0 + r)} {n(y0)}")
+    span = f"{_ts(0)},{_ts(dur)}"
+    cy = y - f.cap_shift(size)
+    return [
+        f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\c&H{box_col}&\\p1}}{box}{{\\p0}}",
+        f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({cx:.0f},{cy:.0f})\\fs{size}\\c&H{ink_col}&}}{text}",
+    ]
+
+
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, top_label: str = "", bottom_label: str = "") -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
+    hook_ink = st.get("hook_ink", HOOK["ink"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
     head = f"""[Script Info]
@@ -456,13 +553,17 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,{st['font']},{st['size']},&H00{st['base']},&H00{st['base']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{st['outline']},0,5,0,0,0,1
-Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+Style: Hook,{HOOK['font']},{HOOK['size']},&H00{hook_ink},&H00{hook_ink},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
-    ev = _hook_events(_clean(hook), dur, hook_y)
+    ev = _hook_events(brain.censor_profanity(_clean(hook)), dur, hook_y, style_name=style_name)
+    if top_label:
+        ev += _pill_events(brain.censor_profanity(top_label), dur, 120, box_col="14100E", ink_col="FFFFFF")
+    if bottom_label:
+        ev += _pill_events(brain.censor_profanity(bottom_label), dur, 1080, box_col="00EAFF", ink_col="0A0A0A")
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -476,7 +577,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             continue
         texts = []
         for x in g:
-            t = re.sub(r"[.,;:]+$", "", x["w"])
+            t = brain.censor_profanity(re.sub(r"[.,;:]+$", "", x["w"]))
             texts.append(t.upper() if st["upper"] else t)
         if not all(roman.drawable(t) for t in texts):
             # A script the caption font cannot draw (Japanese, Thai, Chinese...): its words cannot be measured, so
@@ -514,21 +615,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(ev) + "\n"
 
 
-def _facecam_stack_chain(in_pad: str, out_pad: str, tag: str, cam_box: tuple) -> str:
-    """Crops detected corner facecam into Top 38% (1080x730) and shifts clean gameplay (width 56%) away from the facecam into Bottom 62% (1080x1190)."""
+def _facecam_stack_chain(in_pad: str, out_pad: str, tag: str, cam_box: tuple, zoom_gameplay: float = 1.0) -> str:
+    """Crops detected corner/mid-side facecam into Top 38% (1080x730) and shifts clean gameplay into Bottom 62% (1080x1190)."""
     cx, cy, cw, ch = cam_box
     top_h = int(round(H * 0.38 / 2)) * 2   # 730
     bot_h = H - top_h                      # 1190
-    gw = 0.5600
-    if cx + cw * 0.5 < 0.5:
-        gx = max(0.2200, min(1.0 - gw, round(cx + cw, 4)))
+    zg = max(1.0, float(zoom_gameplay or 1.0))
+    if zg <= 1.01:
+        gw = 0.5600
+        if cx + cw * 0.5 < 0.5:
+            gx = max(0.2200, min(1.0 - gw, round(cx + cw, 4)))
+        else:
+            gx = max(0.0, min(0.2200, round(cx - gw, 4)))
+        gp_crop = f"crop=iw*{gw:.4f}:ih:iw*{gx:.4f}:0"
     else:
-        gx = max(0.0, min(0.2200, round(cx - gw, 4)))
+        gw = round(0.5600 / zg, 4)
+        gh = round(1.0 / zg, 4)
+        gy = round((1.0 - gh) * 0.5, 4)
+        if cx + cw * 0.5 < 0.5:
+            gx = max(round(cx + cw, 4), min(round(1.0 - gw, 4), round(0.5 - gw * 0.5, 4)))
+        else:
+            gx = max(0.0, min(round(cx - gw, 4), round(0.5 - gw * 0.5, 4)))
+        gp_crop = f"crop=iw*{gw:.4f}:ih*{gh:.4f}:iw*{gx:.4f}:ih*{gy:.4f}"
     return (
         f"{in_pad}split=2[fc_t_{tag}][fc_b_{tag}];"
         f"[fc_t_{tag}]crop=iw*{cw:.4f}:ih*{ch:.4f}:iw*{cx:.4f}:ih*{cy:.4f},"
         f"scale={W}:{top_h}:force_original_aspect_ratio=increase,crop={W}:{top_h},setsar=1[top_{tag}];"
-        f"[fc_b_{tag}]crop=iw*{gw:.4f}:ih:iw*{gx:.4f}:0,"
+        f"[fc_b_{tag}]{gp_crop},"
         f"scale={W}:{bot_h}:force_original_aspect_ratio=increase,crop={W}:{bot_h},setsar=1[bot_{tag}];"
         f"[top_{tag}][bot_{tag}]vstack,{COLOR_PUNCH},setsar=1{out_pad};"
     )
@@ -576,7 +689,7 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
             st = max(0.0, min(dur, float(s.get("start", 0.0))))
             en = max(0.0, min(dur, float(s.get("end", dur))))
             typ = str(s.get("type", "wide")).lower()
-            if typ not in ("wide", "close", "crop", "zoom", "split"):
+            if typ not in ("wide", "close", "crop", "zoom", "split", "split_zoom"):
                 typ = "wide"
             if en - st >= 0.4:
                 clean.append({"start": st, "end": en, "type": typ})
@@ -606,11 +719,11 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
 
     if len(clean) == 1:
         st = clean[0]["type"]
-        if st == "split" and cam_box is not None:
+        if st in ("split", "split_zoom") and cam_box is not None:
             return _filter("facecam", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
         if st == "crop":
             return _filter("crop", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
-        if st == "zoom" or (st == "split" and cam_box is None):
+        if st == "zoom" or (st in ("split", "split_zoom") and cam_box is None):
             return _filter("zoom", 1000, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
         return _filter("blur", fg_h, facecam_box=cam_box, focus_x=focus_x, src_w=src_w, src_h=src_h)
 
@@ -629,7 +742,7 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
             else:
                 fc.append(f"{trim},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{COLOR_PUNCH},setsar=1[v{i}_p];")
         else:
-            eff_type = "zoom" if (stype == "split" and cam_box is None) else stype
+            eff_type = "zoom" if (stype in ("split", "split_zoom") and cam_box is None) else stype
             if eff_type == "crop":
                 if abs(float(focus_x) - 0.5) > 0.02:
                     fc.append(f"{trim}," + _filter_speaker_crop(focus_x, src_w, src_h) + f"[v{i}_p];")
@@ -650,8 +763,9 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
                           f"[zb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[zbg{i}];"
                           f"[zf{i}]scale={W}:1000:force_original_aspect_ratio=increase,crop={W}:1000,{COLOR_PUNCH}[zfg{i}];"
                           f"[zbg{i}][zfg{i}]overlay=0:(H-h)/2,setsar=1[v{i}_p];")
-            elif eff_type == "split":
-                fc.append(f"{trim}[tr_{i}];" + _facecam_stack_chain(f"[tr_{i}]", f"[v{i}_p]", f"s{i}", cam_box))
+            elif eff_type in ("split", "split_zoom"):
+                zg = 1.22 if eff_type == "split_zoom" else 1.0
+                fc.append(f"{trim}[tr_{i}];" + _facecam_stack_chain(f"[tr_{i}]", f"[v{i}_p]", f"s{i}", cam_box, zoom_gameplay=zg))
             else:  # wide / blur
                 fc.append(f"{trim},split=2[wb{i}][wf{i}];"
                           f"[wb{i}]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale={W}:{H},eq=brightness=-0.14:saturation=1.15[wbg{i}];"
@@ -663,6 +777,40 @@ def _multishot_filter(shots, fg_h, dur, src_w, src_h, facecam_box=None, layout="
     return "".join(fc)
 
 
+def _audio_filter_args(bgm_rel_name: str | None = None, bgm_vol: float = 0.18, trim_audio=None) -> tuple[list[str], str | None]:
+    """Return extra ffmpeg input args and audio filter_complex graph (with sidechain ducking when BGM is attached)."""
+    atrim = f"atrim=start={trim_audio[0]:.2f}:end={trim_audio[1]:.2f},asetpts=PTS-STARTPTS," if trim_audio else ""
+    if not bgm_rel_name:
+        if not atrim:
+            return [], None
+        return [], f"[0:a:0]{atrim}loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+    vol = max(0.02, min(0.8, float(bgm_vol or 0.18)))
+    af_complex = (
+        f"[0:a:0]{atrim}aresample=48000,aformat=channel_layouts=stereo,asplit=2[main][sc];"
+        f"[1:a:0]aresample=48000,aformat=channel_layouts=stereo,volume={vol:.2f}[bgm];"
+        f"[bgm][sc]sidechaincompress=threshold=0.03:ratio=6:attack=15:release=250[bgm_ducked];"
+        f"[main][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=0,"
+        f"loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+    )
+    return ["-stream_loop", "-1", "-i", bgm_rel_name], af_complex
+
+
+def _comparison_split_filter(t_top: tuple[float, float], t_bot: tuple[float, float], dur: float) -> str:
+    """Render two time ranges stacked vertically (50/50 1080x960 each) for A/B comparisons (e.g. GTA 5 vs GTA 6)."""
+    half_h = H // 2
+    s1 = max(0.0, float(t_top[0]))
+    s2 = max(0.0, float(t_bot[0]))
+    dur = max(0.5, float(dur))
+    return (
+        f"[0:v]fps={config.OUT_FPS},split=2[va][vb];"
+        f"[va]trim=start={s1:.2f}:end={s1 + dur:.2f},setpts=PTS-STARTPTS,"
+        f"scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[top];"
+        f"[vb]trim=start={s2:.2f}:end={s2 + dur:.2f},setpts=PTS-STARTPTS,"
+        f"scale={W}:{half_h}:force_original_aspect_ratio=increase,crop={W}:{half_h},setsar=1[bot];"
+        f"[top][bot]vstack,{COLOR_PUNCH},setsar=1[v0];"
+    )
+
+
 _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
 
@@ -670,21 +818,30 @@ RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a fro
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
     """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    start, end = clip["start"], clip["end"]
+    start, end = float(clip["start"]), float(clip["end"])
     req_layout = clip.get("layout", "blur")
     shots = clip.get("shots") or []
+
+    comp_range = None
+    if clip.get("compare_start") is not None and clip.get("compare_end") is not None:
+        cs, ce = float(clip["compare_start"]), float(clip["compare_end"])
+        comp_dur = max(0.5, min(end - start, ce - cs))
+        comp_range = ((start, start + comp_dur), (cs, cs + comp_dur), comp_dur)
+        end = start + comp_dur
 
     framing = {"mode": "wide", "facecam_box": None, "focus_x": 0.5, "face_count": 0}
     explicit_box = resolve_facecam_box(req_layout, clip.get("facecam_box"))
     if clip.get("facecam_box") and explicit_box is not None:
         framing = {"mode": "facecam", "facecam_box": explicit_box, "focus_x": 0.5, "face_count": 1}
-    elif req_layout == "facecam" or req_layout == "multishot":
+    elif not comp_range and (req_layout == "facecam" or req_layout == "multishot"):
         framing = analyze_clip_framing(src, start, end)
         if framing.get("facecam_box") is not None:
             clip["facecam_box"] = list(framing["facecam_box"])
 
     effective_layout = req_layout
-    if req_layout == "facecam":
+    if comp_range:
+        effective_layout = "comparison"
+    elif req_layout == "facecam":
         if framing["mode"] == "facecam" and framing["facecam_box"] is not None:
             effective_layout = "facecam"
         elif framing["mode"] == "speaker_crop":
@@ -692,9 +849,24 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
         else:
             effective_layout = "blur"
 
-    _, fg_h, hook_y, cap_y = geometry(src_w, src_h, effective_layout)
-    ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y)
+    if effective_layout == "comparison":
+        fg_h, hook_y, cap_y = H, 960, 1520
+    else:
+        _, fg_h, hook_y, cap_y = geometry(src_w, src_h, effective_layout)
+
+    ass = build_ass(
+        words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
+        clip.get("highlight_words", []), hook_y, cap_y,
+        top_label=str(clip.get("top_label") or ""),
+        bottom_label=str(clip.get("bottom_label") or ""),
+    )
+    bgm_path = None
+    if flags.is_on("PEAKCUT_ASSETS") and clip.get("bgm_path"):
+        cand = Path(str(clip["bgm_path"]))
+        if cand.is_file():
+            bgm_path = cand
+    bgm_vol = float(clip.get("bgm_vol") or 0.18)
+
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
         res = _render_in(
@@ -703,6 +875,7 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
             facecam_box=framing.get("facecam_box") or explicit_box,
             focus_x=framing.get("focus_x", 0.5),
             req_layout=req_layout, framing_mode=framing["mode"],
+            bgm_path=bgm_path, bgm_vol=bgm_vol, comp_range=comp_range,
         )
         return res
     finally:
@@ -711,26 +884,52 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
                shots: list = None, src_w: int = 0, src_h: int = 0, facecam_box=None,
-               focus_x: float = 0.5, req_layout: str = "", framing_mode: str = "") -> dict:
+               focus_x: float = 0.5, req_layout: str = "", framing_mode: str = "",
+               bgm_path: Path = None, bgm_vol: float = 0.18, comp_range=None) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    dur = end - start
-    if layout == "multishot":
-        rel_shots = []
-        for s in (shots or []):
-            if isinstance(s, dict):
-                rel_shots.append({"start": float(s.get("start", start)) - start,
-                                  "end": float(s.get("end", end)) - start,
-                                  "type": s.get("type", "wide")})
-        fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h, facecam_box=facecam_box, layout=layout, focus_x=focus_x) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+
+    bgm_rel = None
+    if bgm_path and Path(bgm_path).is_file():
+        bgm_rel = f"bgm{Path(bgm_path).suffix or '.mp3'}"
+        shutil.copyfile(bgm_path, work / bgm_rel)
+
+    if comp_range:
+        t_top, t_bot, dur = comp_range
+        fc = _comparison_split_filter(t_top, t_bot, dur) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        extra_in, af_complex = _audio_filter_args(bgm_rel, bgm_vol=bgm_vol, trim_audio=(t_top[0], t_top[0] + dur))
+        in_args = ["-i", str(src)] + extra_in
     else:
-        fc = _filter(layout, fg_h, facecam_box=facecam_box, focus_x=focus_x, src_w=src_w or 1920, src_h=src_h or 1080) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+        dur = end - start
+        if layout == "multishot":
+            rel_shots = []
+            for s in (shots or []):
+                if isinstance(s, dict):
+                    rel_shots.append({"start": float(s.get("start", start)) - start,
+                                      "end": float(s.get("end", end)) - start,
+                                      "type": s.get("type", "wide")})
+            fc = _multishot_filter(rel_shots, fg_h, dur, src_w, src_h, facecam_box=facecam_box, layout=layout, focus_x=focus_x) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        else:
+            fc = _filter(layout, fg_h, facecam_box=facecam_box, focus_x=focus_x, src_w=src_w or 1920, src_h=src_h or 1080) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        extra_in, af_complex = _audio_filter_args(bgm_rel, bgm_vol=bgm_vol)
+        in_args = ["-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src)] + extra_in
+
+    if af_complex:
+        fc = fc + ";" + af_complex
+        audio_map = ["-map", "[aout]"]
+    else:
+        audio_map = ["-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]
+
+    base = (
+        ["ffmpeg", "-y", "-v", "error"]
+        + in_args
+        + ["-filter_complex", fc, "-map", "[v]"]
+        + audio_map
+        + ["-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+    )
     encoders = []
     if _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
@@ -748,7 +947,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             _qsv_ok = False
     else:
         raise RuntimeError(f"Render failed: {err}")
-    cover_t = min(1.2, (end - start) / 2)
+    cover_t = min(1.2, dur / 2)
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", f"{name}.mp4", "-frames:v", "1",
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):
