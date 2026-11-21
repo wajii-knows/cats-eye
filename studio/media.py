@@ -274,11 +274,16 @@ def download_section(url: str, out_dir: Path, stem: str, start: float, end: floa
     return _biggest(out_dir, stem)
 
 
-def find_offset(full: np.ndarray, part: np.ndarray, expected: float, search=20.0) -> float:
-    """Where in the full audio (seconds) a downloaded piece really begins, by matching the sound itself."""
+def find_offset(full, part: np.ndarray, expected: float, search=20.0) -> float:
+    """Where in the full audio (seconds) a downloaded piece really begins, by matching the sound itself.
+    `full` may be an int16 NumPy array or a Path/str to a 16kHz PCM WAV (streamed bounded slice)."""
     n = min(len(part), 30 * 16000)
     a0 = max(0, int((expected - search) * 16000))
-    hay = full[a0: int((expected + search) * 16000) + n].astype(np.float32)
+    b0 = int((expected + search) * 16000) + n
+    if isinstance(full, (str, Path)):
+        hay = read_audio_slice(Path(full), a0, b0).astype(np.float32)
+    else:
+        hay = full[a0: b0].astype(np.float32)
     needle = part[:n].astype(np.float32)
     if n < 16000 or len(hay) < n or float(np.abs(needle).mean()) < 20:
         return expected  # too short or silent to match: trust the requested time
@@ -315,6 +320,104 @@ def load_audio(wav: Path) -> np.ndarray:
     data, sr = sf.read(str(wav), dtype="int16")
     assert sr == 16000
     return data
+
+
+def wav_frames(wav: Path) -> int:
+    """Return total sample count of a WAV file without loading samples into memory."""
+    return int(sf.info(str(wav)).frames)
+
+
+def read_audio_slice(wav: Path, start_sample: int, end_sample: int) -> np.ndarray:
+    """Stream only `[start_sample, end_sample)` from a 16kHz WAV file into int16 RAM."""
+    lo = max(0, int(start_sample))
+    hi = max(lo, int(end_sample))
+    n = hi - lo
+    if n <= 0:
+        return np.zeros(0, dtype=np.int16)
+    with sf.SoundFile(str(wav)) as f:
+        lo = min(lo, len(f))
+        f.seek(lo)
+        data = f.read(min(n, max(0, len(f) - lo)), dtype="int16", always_2d=False)
+    if getattr(data, "ndim", 1) > 1:
+        data = data[:, 0]
+    return np.asarray(data, dtype=np.int16)
+
+
+def loudness_from_wav(wav: Path, start_sample: int = 0, end_sample: int = None, chunk_sec: int = 120) -> np.ndarray:
+    """Compute per-second RMS loudness (dB) across a WAV slice by streaming small chunks (< 4 MB RAM)."""
+    with sf.SoundFile(str(wav)) as f:
+        total = int(len(f))
+        lo = max(0, min(total, int(start_sample)))
+        hi = total if end_sample is None else max(lo, min(total, int(end_sample)))
+        rem = hi - lo
+        if rem < 16000:
+            return np.zeros(1, dtype=np.float32)
+        chunk_samples = max(1, int(chunk_sec)) * 16000
+        f.seek(lo)
+        chunks = []
+        while rem >= 16000:
+            want = (min(rem, chunk_samples) // 16000) * 16000
+            if want <= 0:
+                break
+            data = f.read(want, dtype="int16", always_2d=False)
+            if len(data) < 16000:
+                break
+            if getattr(data, "ndim", 1) > 1:
+                data = data[:, 0]
+            n_sec = len(data) // 16000
+            if n_sec <= 0:
+                break
+            x = data[: n_sec * 16000].reshape(n_sec, 16000).astype(np.float32) / 32768.0
+            rms = np.sqrt((x ** 2).mean(axis=1) + 1e-10)
+            chunks.append((20.0 * np.log10(rms)).astype(np.float32))
+            rem -= len(data)
+    return np.concatenate(chunks) if chunks else np.zeros(1, dtype=np.float32)
+
+
+def looks_like_video(path: Path, ext: str = "") -> bool:
+    """Validate uploaded video files by container magic bytes (with ffprobe fallback), never trusting extension alone."""
+    p = Path(path)
+    try:
+        if not p.is_file() or p.stat().st_size < 12:
+            return False
+        with p.open("rb") as f:
+            hdr = f.read(4096)
+    except OSError:
+        return False
+    if len(hdr) < 12:
+        return False
+
+    stripped = hdr.lstrip()[:8].lower()
+    if (
+        hdr.startswith((b"MZ", b"\x7fELF", b"#!", b"PK\x03\x04", b"%PDF", b"\x89PNG", b"\xff\xd8\xff", b"GIF8"))
+        or stripped.startswith((b"<!doc", b"<html", b"<svg", b"<?xml"))
+    ):
+        return False
+
+    if hdr[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot"):
+        return True
+    if hdr[:4] == b"\x1a\x45\xdf\xa3" or hdr[:3] == b"FLV" or hdr[:4] == b"OggS":
+        return True
+    if hdr[:4] == b"RIFF" and hdr[8:12] == b"AVI ":
+        return True
+    if (len(hdr) >= 377 and hdr[0] == 0x47 and hdr[188] == 0x47 and hdr[376] == 0x47) or (
+        len(hdr) >= 389 and hdr[4] == 0x47 and hdr[196] == 0x47
+    ):
+        return True
+    if hdr[:4] in (b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3") or hdr[:8] == b"\x30\x26\xb2\x75\x8e\x66\xcf\x11":
+        return True
+
+    try:
+        pr = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(p)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW, timeout=5,
+        )
+        if pr.returncode == 0 and pr.stdout.strip():
+            streams = json.loads(pr.stdout).get("streams") or []
+            return any(s.get("codec_type") == "video" for s in streams)
+    except Exception:
+        pass
+    return False
 
 
 def loudness_per_second(audio: np.ndarray) -> np.ndarray:
@@ -514,5 +617,4 @@ def scan_frame_metrics(
             except Exception:
                 pass
     return results
-
 

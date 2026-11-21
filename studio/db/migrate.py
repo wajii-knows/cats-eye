@@ -21,18 +21,12 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 def ensure_migrations_table(conn: sa.Connection) -> None:
     """Ensure the schema_migrations tracking table exists."""
-    insp = sa.inspect(conn)
-    if not insp.has_table("schema_migrations"):
-        conn.execute(
-            sa.text(
-                """
-                CREATE TABLE schema_migrations (
-                    name VARCHAR(255) PRIMARY KEY,
-                    applied_at DOUBLE PRECISION NOT NULL
-                )
-                """
-            )
-        )
+    sa.Table(
+        "schema_migrations",
+        sa.MetaData(),
+        sa.Column("name", sa.String(255), primary_key=True),
+        sa.Column("applied_at", sa.Float, nullable=False),
+    ).create(conn, checkfirst=True)
 
 
 def get_applied_migrations(conn: sa.Connection) -> List[str]:

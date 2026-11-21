@@ -119,6 +119,7 @@ def main() -> None:
 
     # Set Colab flags
     os.environ["PEAKCUT_COLAB"] = "1"
+    os.environ.setdefault("PEAKCUT_VIRAL_V2", "1")
     os.environ["PEAKCUT_PORT"] = str(args.port)
 
     # Determine directories

@@ -53,9 +53,36 @@ class DurableUploader:
         self._threads: list[threading.Thread] = []
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._pending_rels: set[str] = set()
+        self._tombstones: dict[str, float] = {}
         self.pending_bytes = 0
         self.last_sync_time = time.time()
         self.last_error: Optional[str] = None
+
+    @staticmethod
+    def _norm(rel: str) -> str:
+        return str(rel or "").replace("\\", "/").strip("/")
+
+    def _is_tombstoned_locked(self, norm_rel: str) -> bool:
+        if not norm_rel:
+            return False
+        for pref in self._tombstones:
+            if norm_rel == pref or norm_rel.startswith(pref + "/"):
+                return True
+        return False
+
+    def cancel_prefix(self, prefix: str) -> None:
+        """Stop pending/retried uploads under `prefix` and prevent resurfaced writes for deleted resources."""
+        norm = self._norm(prefix)
+        if not norm:
+            return
+        with self._lock:
+            self._tombstones[norm] = time.time()
+            self._pending_rels = {
+                r for r in self._pending_rels if not (r == norm or r.startswith(norm + "/"))
+            }
+            if self.last_error and (norm in self.last_error or "Local file does not exist" in self.last_error):
+                self.last_error = None
 
     def start(self) -> None:
         if self._threads:
@@ -79,6 +106,7 @@ class DurableUploader:
         on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> UploadTask:
+        norm_rel = self._norm(durable_rel_path)
         task = UploadTask(
             local_path=local_path,
             durable_rel_path=durable_rel_path,
@@ -87,6 +115,9 @@ class DurableUploader:
             on_error=on_error,
         )
         with self._lock:
+            if self._is_tombstoned_locked(norm_rel) or norm_rel in self._pending_rels:
+                return task
+            self._pending_rels.add(norm_rel)
             self.pending_bytes += task.size_bytes
         self.queue.put(task)
         return task
@@ -99,6 +130,7 @@ class DurableUploader:
         on_complete: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> UploadTask:
+        norm_rel = self._norm(durable_rel_path)
         task = UploadTask(
             local_path=local_dir,
             durable_rel_path=durable_rel_path,
@@ -108,6 +140,9 @@ class DurableUploader:
             on_error=on_error,
         )
         with self._lock:
+            if self._is_tombstoned_locked(norm_rel) or norm_rel in self._pending_rels:
+                return task
+            self._pending_rels.add(norm_rel)
             self.pending_bytes += task.size_bytes
         self.queue.put(task)
         return task
@@ -152,9 +187,19 @@ class DurableUploader:
             except queue.Empty:
                 continue
 
+            norm_rel = self._norm(task.durable_rel_path)
+            with self._lock:
+                self._pending_rels.discard(norm_rel)
+                tombstoned = self._is_tombstoned_locked(norm_rel)
+
             success = False
-            meta = None
+            dropped = False
             try:
+                exists_now = task.local_path.is_dir() if task.is_directory else task.local_path.is_file()
+                if tombstoned or not exists_now:
+                    dropped = True
+                    continue
+
                 if task.is_directory:
                     meta = self.store.put_dir_packed(task.local_path, task.durable_rel_path, archive_name=task.archive_name)
                 else:
@@ -167,13 +212,28 @@ class DurableUploader:
                         task.on_complete(meta)
                     except Exception as e:
                         logger.warning("Error in upload on_complete: %s", e)
+            except FileNotFoundError:
+                dropped = True
             except Exception as e:
+                exists_after = task.local_path.is_dir() if task.is_directory else task.local_path.is_file()
+                with self._lock:
+                    tombstoned_after = self._is_tombstoned_locked(norm_rel)
+                if tombstoned_after or not exists_after:
+                    dropped = True
+                    continue
                 logger.warning("Durable upload failed for %s: %s", task.durable_rel_path, e)
                 task.retries += 1
                 if task.retries <= 3:
-                    # Exponential backoff
                     time.sleep(1.0 * task.retries)
-                    self.queue.put(task)
+                    with self._lock:
+                        still_ok = (not self._is_tombstoned_locked(norm_rel)) and (
+                            task.local_path.is_dir() if task.is_directory else task.local_path.is_file()
+                        )
+                        if still_ok:
+                            self._pending_rels.add(norm_rel)
+                            self.queue.put(task)
+                        else:
+                            dropped = True
                 else:
                     self.last_error = str(e)
                     if task.on_error:
@@ -182,7 +242,7 @@ class DurableUploader:
                         except Exception:
                             pass
             finally:
-                if success or task.retries > 3:
+                if success or dropped or task.retries > 3:
                     with self._lock:
                         self.pending_bytes = max(0, self.pending_bytes - task.size_bytes)
                 self.queue.task_done()

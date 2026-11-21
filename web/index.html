@@ -2539,7 +2539,7 @@ document.addEventListener("click", async e => {
       const what = [jobsSel.length ? (jobsSel.length === 1 ? "1 video with all its clips" : `${jobsSel.length} videos with all their clips`) : "", clipsSel.length ? `${clipsSel.length} clip${clipsSel.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
       if (!await ask("Delete what you selected?", `This removes ${what} for good. It cannot be undone.`, "Delete", true)) return;
       const r = await send("/api/bulk/delete", {videos: jobsSel, clips: clipsSel});
-      sel().clear(); await tick(); render();
+      sel().clear(); S.syncV = ""; await tick(); render();
       return toast(`Deleted ${r.videos} video${r.videos === 1 ? "" : "s"} and ${r.clips} clip${r.clips === 1 ? "" : "s"}` + (r.skipped ? `. ${r.skipped} still being made were left alone.` : ""), "ok");
     }
     if (a === "delcreator") {
@@ -2570,12 +2570,19 @@ document.addEventListener("click", async e => {
     if (a === "remjob") {
       if (!await ask("Remove this video?", "Processing will stop immediately and this video and its clips will be removed.", "Remove", true)) return;
       await api(`/api/jobs/${encodeURIComponent(d.j)}`, {method:"DELETE"});
+      S.jobs = S.jobs.filter(j => j.id !== d.j); S.syncV = ""; render();
       toast("Removed");
       return tick();
     }
     if (a === "deljob") {
       if (!await ask("Delete this video?", "The video and all of its clips are permanently deleted. This cannot be undone.", "Delete", true)) return;
-      await api(`/api/jobs/${encodeURIComponent(d.j)}`, {method:"DELETE"}); toast("Deleted"); return tick();
+      await api(`/api/jobs/${encodeURIComponent(d.j)}`, {method:"DELETE"});
+      S.jobs = S.jobs.filter(j => j.id !== d.j); S.syncV = ""; render();
+      toast("Deleted"); return tick();
+    }
+    if (a === "backvis") {
+      const curJob = jobOf(V.jid);
+      return go(curJob?.creator ? "c:" + curJob.creator : "videos");
     }
     if (a === "openvideo") return go("v:" + d.j);
     if (a === "analyzevis") {
@@ -2879,7 +2886,8 @@ function syncFromMoment(mIdx, scrollStrip = false) {
 function drawVideoDetail(forceRebuild = false) {
   const box = $("#videoDetail"); if (!box || !S.view.startsWith("v:")) return;
   const jid = S.view.slice(2), j = jobOf(jid);
-  if (!j) { put(box, `<div class="empty"><b>Video not found</b></div>`); return; }
+  if (!j) { put(box, `<div class="empty"><b>Video not found</b><button type="button" class="btn sm ghost" data-act="backvis" aria-label="Back to videos">← Back</button></div>`); return; }
+  const backBtn = `<button type="button" class="btn sm ghost" data-act="backvis" aria-label="Back to videos">← Back</button>`;
   const vis = j.visuals || {};
   const st = vis.status || "idle";
 
@@ -2888,14 +2896,14 @@ function drawVideoDetail(forceRebuild = false) {
 
   if (st === "idle") {
     box.dataset.ready = "0";
-    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div><h2>Visual understanding</h2><p class="sub">Detect scene boundaries, extract keyframes, classify layouts, and link frames to transcript moments.</p></div>
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div>${backBtn}<h2>Visual understanding</h2><p class="sub">Detect scene boundaries, extract keyframes, classify layouts, and link frames to transcript moments.</p></div>
       <button class="btn primary" data-act="analyzevis" data-j="${esc(jid)}">${ic("bolt")}Analyze visuals</button></div></div>`);
     return;
   }
   if (st === "analyzing") {
     box.dataset.ready = "0";
     const pct = Math.round((vis.progress || 0) * 100);
-    put(box, `<div class="ce-vis-card"><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Analyzing visuals">
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head">${backBtn}</div><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Analyzing visuals">
       <h3>${esc(vis.stage || "Analyzing visuals…")}</h3>
       <div class="bar" style="width:100%;max-width:360px"><i style="width:${pct}%"></i></div>
       <p class="sub">${pct}% complete</p></div></div>`);
@@ -2903,13 +2911,13 @@ function drawVideoDetail(forceRebuild = false) {
   }
   if (st === "failed") {
     box.dataset.ready = "0";
-    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div><h2>Visual analysis failed</h2><div class="err">${esc(vis.error || "Unknown error")}</div></div>
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head"><div>${backBtn}<h2>Visual analysis failed</h2><div class="err">${esc(vis.error || "Unknown error")}</div></div>
       <button class="btn primary" data-act="analyzevis" data-j="${esc(jid)}" data-force="1">Retry analysis</button></div></div>`);
     return;
   }
   if (!V.loaded) {
     box.dataset.ready = "0";
-    put(box, `<div class="ce-vis-card"><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Loading visuals"><p class="sub">Loading visual timeline…</p></div></div>`);
+    put(box, `<div class="ce-vis-card"><div class="ce-vis-head">${backBtn}</div><div class="ce-vis-loader"><img src="/brand/loader.svg" alt="Loading visuals"><p class="sub">Loading visual timeline…</p></div></div>`);
     openVideoDetail(jid);
     return;
   }
@@ -2938,6 +2946,7 @@ function drawVideoDetail(forceRebuild = false) {
 
   box.innerHTML = `<div class="ce-vis-card"><div class="ce-vis-head">
       <div class="ce-vis-badges">
+        ${backBtn}
         <span class="pill ok">${V.scenes.length} scene${V.scenes.length === 1 ? "" : "s"}</span>
         <span class="pill ok">${V.totalSnaps} snapshot${V.totalSnaps === 1 ? "" : "s"}</span>
         <span class="pill">${V.totalMoments} moment${V.totalMoments === 1 ? "" : "s"}</span>

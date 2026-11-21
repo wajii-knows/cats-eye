@@ -395,8 +395,11 @@ def score_clip(s: float, e: float, words=None, db_z=None, ai_clip=None, min_len:
     dur = max(0.5, e - s)
     cwords = [w for w in (words or []) if float(w.get("e", 0.0)) >= s - 0.05 and float(w.get("s", 0.0)) <= e + 0.05]
     full_text = " ".join(str(w.get("w", "")) for w in cwords)
-    vis = _visual_subscores(s, e, visual_snaps)
-    has_visual = bool(visual_snaps)
+    use_visual = bool(visual_snaps) and (flags.is_on("PEAKCUT_VIRAL_V2") or flags.is_on("PEAKCUT_SNAPSHOTS"))
+    vis = _visual_subscores(s, e, visual_snaps) if use_visual else {
+        "v_hook": 0.0, "v_pacing": 0.0, "v_payoff": 0.0, "v_clarity": 0.0, "is_static": False, "max_motion": 0.0,
+    }
+    has_visual = use_visual
 
     seg_z = open_z = np.empty(0)
     has_audio = False

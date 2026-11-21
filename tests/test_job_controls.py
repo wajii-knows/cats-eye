@@ -99,13 +99,21 @@ with ctx.as_user(u_a.id):
     jobs._running_contexts[j_run["id"]] = sctx
 
     ev = threading.Event()
+    started = threading.Event()
     pool = ThreadPoolExecutor(1)
-    fut = pool.submit(ev.wait, 30)
+    fut = pool.submit(lambda: (started.set(), ev.wait(30)))
     t_w0 = time.time()
-    threading.Timer(0.15, lambda: jobs.pause(j_run["id"])).start()
+
+    def _trigger_pause():
+        started.wait(5.0)
+        jobs.pause(j_run["id"])
+
+    t_p = threading.Thread(target=_trigger_pause, daemon=True)
+    t_p.start()
     jobs._wait_for_clips(j_run, [(fut, {"id": "clip01"})], {}, 1, sctx=sctx)
     elapsed = time.time() - t_w0
     ev.set()
+    t_p.join(timeout=2.0)
     pool.shutdown(wait=True)
     check(
         "pause immediately cancels StageContext and aborts _wait_for_clips",

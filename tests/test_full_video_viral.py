@@ -9,6 +9,8 @@ from pathlib import Path
 
 os.environ["PEAKCUT_DATA"] = tempfile.mkdtemp(prefix="pc-fullvid-")
 os.environ["DATABASE_URL"] = ""
+os.environ["PEAKCUT_ACCOUNTS"] = "1"
+os.environ["PEAKCUT_VERIFY_EMAIL"] = "0"
 os.environ["PEAKCUT_AI_KEY"] = ""
 os.environ["PEAKCUT_FETCH_MODEL"] = "0"
 os.environ["PEAKCUT_MULTISHOT"] = "0"
@@ -70,7 +72,41 @@ try:
     )
     canceled_m = media.scan_frame_metrics(scan_src, interval_sec=0.5, should_cancel=lambda: True)
     missing_m = media.scan_frame_metrics(work / "missing.mp4")
-    check("media.scan_frame_metrics stops cleanly on cancel or missing file", canceled_m == [] and missing_m == [])
+    corrupt_mp4 = work / "corrupt.mp4"
+    corrupt_mp4.write_bytes(b"NOT_A_REAL_VIDEO_STREAM_CORRUPT_PIPE_TEST" * 100)
+    corrupt_m = media.scan_frame_metrics(corrupt_mp4)
+    check(
+        "media.scan_frame_metrics stops cleanly on cancel, missing file, or corrupt/broken video stream",
+        canceled_m == [] and missing_m == [] and corrupt_m == [],
+    )
+
+    # Streaming WAV audio helpers (low-RAM path for multi-hour videos)
+    stream_wav = work / "stream_4s.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=2,volume=0.05",
+            "-f", "lavfi", "-i", "sine=frequency=880:duration=2,volume=0.6",
+            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+            "-map", "[a]", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(stream_wav),
+        ],
+        check=True,
+    )
+    full_samples = media.load_audio(stream_wav)
+    stream_db = media.loudness_from_wav(stream_wav, chunk_sec=1)
+    array_db = media.loudness_per_second(full_samples)
+    slice_1s = media.read_audio_slice(stream_wav, 16000, 32000)
+    part_slice = media.read_audio_slice(stream_wav, 16000, 48000)
+    wav_off = media.find_offset(stream_wav, part_slice, 1.2)
+    check(
+        "Streaming WAV helpers (wav_frames, read_audio_slice, loudness_from_wav, find_offset) match in-memory audio",
+        media.wav_frames(stream_wav) >= 60000
+        and len(slice_1s) == 16000
+        and len(stream_db) == len(array_db)
+        and np.allclose(stream_db, array_db, atol=0.1)
+        and abs(wav_off - 1.0) <= 0.1,
+        f"frames={media.wav_frames(stream_wav)} off={wav_off}",
+    )
 
     # ---- 2. Static frozen screen penalty, Clip 1 calibration, non-verbal micro-clips, profanity & _auto_hook
     clip1_words = make_words(
@@ -99,8 +135,20 @@ try:
         {"timestamp": float(t), "time": float(t), "motion": 0.28, "edge_density": 0.22, "blurriness": 0.05, "is_scene_boundary": (t in (0, 6, 15)), "faces": 1}
         for t in (0, 3, 6, 9, 12, 15, 18)
     ]
-    sc_frozen = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=frozen_snaps)
-    sc_dyn = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=dynamic_snaps)
+    sc_off_none = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=None)
+    sc_off_frozen = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=frozen_snaps)
+    check(
+        "Flag-OFF equivalence: score_clip ignores visual_snaps when PEAKCUT_VIRAL_V2 & PEAKCUT_SNAPSHOTS are OFF",
+        sc_off_none["score"] == sc_off_frozen["score"] and sc_off_none["scores"] == sc_off_frozen["scores"],
+        f"none={sc_off_none} | frozen={sc_off_frozen}",
+    )
+
+    flags.override("PEAKCUT_VIRAL_V2", True)
+    try:
+        sc_frozen = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=frozen_snaps)
+        sc_dyn = brain.score_clip(0.0, 19.0, words=punchy_words, db_z=z_loud, visual_snaps=dynamic_snaps)
+    finally:
+        flags.reset_overrides()
     check(
         "Frozen static menu screen scores sharply below dynamic visual clip and blocks 1M+ Strangers",
         sc_dyn["score"] - sc_frozen["score"] >= 20
@@ -260,35 +308,98 @@ try:
         jobs.render_one = fake_render_one
 
         sctx_fv = StageContext(job=job, user_dir=fv_dir.parent.parent, user_id="u_fv", store=ArtifactStore(user_dir=fv_dir.parent.parent, user_id="u_fv"))
-        jobs._run_job_body(job, fv_dir, job["options"], job["source"], 0.0, [], sctx_fv)
+        flags.override("PEAKCUT_VIRAL_V2", True)
+        try:
+            jobs._run_job_body(job, fv_dir, job["options"], job["source"], 0.0, [], sctx_fv)
 
-        trans_indices = [i for i, ev in enumerate(events_log) if ev[0] == "transcribe"]
-        scan_indices = [i for i, ev in enumerate(events_log) if ev[0] == "scan"]
-        find_indices = [i for i, ev in enumerate(events_log) if ev[0] == "find_clips"]
-        render_indices = [i for i, ev in enumerate(events_log) if ev[0] == "render"]
-        check(
-            "Full-video-first pipeline transcribes ALL 3 blocks & checks ALL frames BEFORE calling find_clips ONCE and rendering",
-            len(find_calls) == 1
-            and len(trans_indices) == 3
-            and len(scan_indices) == 1
-            and max(trans_indices) < min(scan_indices) < min(find_indices) < min(render_indices)
-            and job["clips"][0]["start"] == 1210.0
-            and job["clips"][0]["id"] == "clip01"
-            and (fv_dir / "frame_metrics.json").is_file(),
-            f"events={events_log} clips={job['clips']}",
-        )
+            trans_indices = [i for i, ev in enumerate(events_log) if ev[0] == "transcribe"]
+            scan_indices = [i for i, ev in enumerate(events_log) if ev[0] == "scan"]
+            find_indices = [i for i, ev in enumerate(events_log) if ev[0] == "find_clips"]
+            render_indices = [i for i, ev in enumerate(events_log) if ev[0] == "render"]
+            check(
+                "PEAKCUT_VIRAL_V2=1: Full-video-first transcribes ALL 3 blocks & checks ALL frames BEFORE calling find_clips ONCE and rendering",
+                len(find_calls) == 1
+                and len(trans_indices) == 3
+                and len(scan_indices) == 1
+                and max(trans_indices) < min(scan_indices) < min(find_indices) < min(render_indices)
+                and job["clips"][0]["start"] == 1210.0
+                and job["clips"][0]["id"] == "clip01"
+                and (fv_dir / "frame_metrics.json").is_file(),
+                f"events={events_log} clips={job['clips']}",
+            )
 
-        # Resume after selection: skips transcribe, scan, and find_clips; renders only unfinished clip
+            # Resume after selection: skips transcribe, scan, and find_clips; renders only unfinished clip
+            events_log.clear()
+            job["resume"] = True
+            job["clips"][0]["status"] = "queued"
+            job["clips"][1]["status"] = "done"
+            jobs._run_job_body(job, fv_dir, job["options"], job["source"], 0.0, [], sctx_fv)
+            check(
+                "Resume after global selection skips transcribe/scan/find_clips and only renders unfinished clip01",
+                events_log == [("render", "clip01", 1210.0)],
+                str(events_log),
+            )
+        finally:
+            flags.reset_overrides()
+
+        # Flag-OFF progressive equivalence: PEAKCUT_VIRAL_V2=0 & PEAKCUT_SNAPSHOTS=0 runs per-block with zero frame scan
+        prog_dir = Path(tempfile.mkdtemp(dir=config.DATA_DIR, prefix="job-prog-"))
+        (prog_dir / "clips").mkdir(parents=True, exist_ok=True)
+        job_off = {
+            "id": "jobprogoff01",
+            "user": "u_fv",
+            "creator": None,
+            "kind": "video",
+            "dir": str(prog_dir),
+            "title": "Progressive Baseline Test",
+            "uploader": "Streamer",
+            "duration": 1500.0,
+            "width": 1280,
+            "height": 720,
+            "status": "queued",
+            "stage": "Queued",
+            "progress": 0.0,
+            "source": {"type": "file", "path": str(scan_src), "name": "stream.mp4"},
+            "options": {"max_clips": 3, "min_len": 15, "max_len": 35, "style": "bounce", "layout": "blur", "quality": 720, "range_start": None, "range_end": None},
+            "clips": [],
+            "ai": {},
+            "done_blocks": 0,
+        }
+        with jobs._lock:
+            jobs._jobs[job_off["id"]] = job_off
+
         events_log.clear()
-        job["resume"] = True
-        job["clips"][0]["status"] = "queued"
-        job["clips"][1]["status"] = "done"
-        jobs._run_job_body(job, fv_dir, job["options"], job["source"], 0.0, [], sctx_fv)
-        check(
-            "Resume after global selection skips transcribe/scan/find_clips and only renders unfinished clip01",
-            events_log == [("render", "clip01", 1210.0)],
-            str(events_log),
-        )
+        find_calls.clear()
+        call_idx["t"] = 0
+        brain.find_clips = lambda w_b, *a, **kw: (
+            events_log.append(("find_block", len(w_b))),
+            find_calls.append(len(w_b)),
+            ([{
+                "start": 10.0, "end": 28.0, "score": 80,
+                "scores": {"hook": 80, "pacing": 80, "payoff": 80, "shareability": 78, "focus": 82, "clarity": 80},
+                "tier": "strong", "audience_reach": "100K+ Audience", "scroll_stopper": "Moment",
+                "share_trigger": "High energy", "loop_seamless": False, "category": "other",
+                "hook": "MOMENT", "title": "Block Clip", "description": "", "hashtags": [], "highlight_words": [],
+                "reason": "Block pick", "shots": [],
+            }], {"model": "mock", "tokens": 10, "note": ""}),
+        )[2]
+        sctx_off = StageContext(job=job_off, user_dir=prog_dir.parent.parent, user_id="u_fv", store=ArtifactStore(user_dir=prog_dir.parent.parent, user_id="u_fv"))
+        flags.override("PEAKCUT_VIRAL_V2", False)
+        flags.override("PEAKCUT_SNAPSHOTS", False)
+        try:
+            jobs._run_job_body(job_off, prog_dir, job_off["options"], job_off["source"], 0.0, [], sctx_off)
+            check(
+                "Flag-OFF equivalence: _run_job_body runs progressive block-by-block selection with zero scan_frame_metrics calls",
+                len(find_calls) == 3
+                and not any(ev[0] == "scan" for ev in events_log)
+                and not (prog_dir / "frame_metrics.json").is_file()
+                and len(job_off["clips"]) == 3,
+                f"find_calls={len(find_calls)} events={events_log}",
+            )
+        finally:
+            flags.reset_overrides()
+            with jobs._lock:
+                jobs._jobs.pop(job_off["id"], None)
     finally:
         media.probe = orig_probe
         media.extract_audio = orig_ext_aud
@@ -383,9 +494,29 @@ try:
     finally:
         flags.reset_overrides()
 
-    check("web/index.html CAP_LOOK includes gta_viral and vice_neon previews",
-          "gta_viral" in (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-          and "vice_neon" in (ROOT / "web" / "index.html").read_text(encoding="utf-8"))
+    ui_html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    check("web/index.html CAP_LOOK includes gta_viral and vice_neon previews and backvis Back button",
+          "gta_viral" in ui_html and "vice_neon" in ui_html and 'data-act="backvis"' in ui_html)
+
+    # ---- 6. Upload magic-byte container validation (POST /api/upload)
+    from fastapi.testclient import TestClient  # noqa: E402
+    from studio import auth, server  # noqa: E402
+
+    up_client = TestClient(server.app, headers={"Origin": "http://testserver"})
+    r_up_u = up_client.post("/api/auth/signup", json={"email": "magic@example.com", "password": "test-pass-123", "name": "M"})
+    if r_up_u.status_code == 200:
+        auth.mark_verified(r_up_u.json()["user"]["id"])
+    r_spoof_exe = up_client.post("/api/upload", files={"file": ("spoof.mp4", b"MZ" + b"\x00" * 512, "video/mp4")})
+    r_spoof_html = up_client.post("/api/upload", files={"file": ("spoof.mov", b"<html><body>not video</body></html>", "video/quicktime")})
+    r_valid_mp4 = up_client.post("/api/upload", files={"file": ("real.mp4", scan_src.read_bytes(), "video/mp4")})
+    if r_valid_mp4.status_code == 200:
+        with ctx.as_user(r_up_u.json()["user"]["id"]):
+            jobs.delete(r_valid_mp4.json()["id"])
+    check(
+        "POST /api/upload rejects spoofed non-video bytes (400) while accepting real MP4 container",
+        r_spoof_exe.status_code == 400 and r_spoof_html.status_code == 400 and r_valid_mp4.status_code == 200,
+        f"exe={r_spoof_exe.status_code} html={r_spoof_html.status_code} mp4={r_valid_mp4.status_code}",
+    )
 
     print("ALL PASSED" if not fails else f"{len(fails)} failed")
 finally:

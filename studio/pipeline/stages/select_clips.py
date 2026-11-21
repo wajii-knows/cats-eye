@@ -33,7 +33,8 @@ class SelectClipsStage(Stage):
     def run(self, ctx: StageContext) -> Dict[str, Any]:
         words = ctx.inputs.get("transcript_words", [])
         loudness = ctx.inputs.get("loudness_db", [])
-        visual_snaps = ctx.inputs.get("analyzed_snapshots")
+        use_visual = flags.is_on("PEAKCUT_VIRAL_V2") or flags.is_on("PEAKCUT_SNAPSHOTS")
+        visual_snaps = ctx.inputs.get("analyzed_snapshots") if use_visual else None
         if not isinstance(visual_snaps, list):
             visual_snaps = None
         duration = float(ctx.job.get("duration") or 0.0)

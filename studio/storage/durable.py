@@ -72,6 +72,9 @@ class DurableStore:
     def delete(self, durable_rel_path: str) -> bool:
         raise NotImplementedError
 
+    def delete_prefix(self, prefix: str) -> int:
+        raise NotImplementedError
+
     def commit(self, manifest: Optional[Dict[str, Any]] = None) -> None:
         raise NotImplementedError
 
@@ -304,6 +307,31 @@ class LocalFolderStore(DurableStore):
             deleted = True
         return deleted
 
+    def delete_prefix(self, prefix: str) -> int:
+        norm = prefix.replace("\\", "/").strip("/")
+        if not norm:
+            return 0
+        removed = 0
+        with self._manifest_lock:
+            files = self._manifest.get("files", {})
+            keys = [k for k in list(files.keys()) if k == norm or k.startswith(norm + "/")]
+            for k in keys:
+                try:
+                    self._resolve(k).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                files.pop(k, None)
+                removed += 1
+            if removed:
+                self._save_manifest()
+        try:
+            target_dir = self._resolve(norm)
+            if target_dir.is_dir() and target_dir != self.root and target_dir.is_relative_to(self.root):
+                shutil.rmtree(target_dir, ignore_errors=True)
+        except (OSError, ValueError):
+            pass
+        return removed
+
 
 class DriveMountStore(LocalFolderStore):
     """LocalFolderStore with retries and synchronization tailored for Google Drive FUSE mount."""
@@ -316,6 +344,8 @@ class DriveMountStore(LocalFolderStore):
         for attempt in range(3):
             try:
                 return super().put_file(local_path, durable_rel_path)
+            except FileNotFoundError:
+                raise
             except (OSError, IntegrityError) as e:
                 last_err = e
                 time.sleep(0.5 * (attempt + 1))
@@ -326,6 +356,8 @@ class DriveMountStore(LocalFolderStore):
         for attempt in range(3):
             try:
                 return super().get_file(durable_rel_path, local_dest_path)
+            except FileNotFoundError:
+                raise
             except (OSError, IntegrityError) as e:
                 last_err = e
                 time.sleep(0.5 * (attempt + 1))
@@ -429,6 +461,9 @@ class FaultInjectingStore(DurableStore):
 
     def delete(self, durable_rel_path: str) -> bool:
         return self.wrapped.delete(durable_rel_path)
+
+    def delete_prefix(self, prefix: str) -> int:
+        return self.wrapped.delete_prefix(prefix)
 
     def commit(self, manifest: Optional[Dict[str, Any]] = None) -> None:
         self.wrapped.commit(manifest=manifest)

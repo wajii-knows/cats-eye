@@ -38,7 +38,8 @@ with db.engine.begin() as cn:
         cn.execute(db.email_ok.insert().values(user_id=uid, verified_at=time.time()))
 st = a.get("/api/status").json()
 part_mb = st["upload_part_mb"]
-data = os.urandom(int(part_mb * 1024 * 1024 * 2.4))            # two full pieces and a shorter last one
+mp4_hdr = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+data = mp4_hdr + os.urandom(int(part_mb * 1024 * 1024 * 2.4) - len(mp4_hdr))  # two full pieces and a shorter last one
 H = {"Content-Type": "application/octet-stream"}
 
 s = a.post("/api/upload/start", json={"name": "big video.mp4", "size": len(data), "options": {"max_clips": 2}, "creator": ""}).json()
@@ -74,6 +75,10 @@ big = a.put(f"/api/upload/{'0' * 24}/0", content=b"x" * ((part_mb + 9) * 1024 * 
 check("an oversized request to the pieces address is cut off", big.status_code == 413, str(big.status_code))
 c = a.post("/api/upload/start", json={"name": "y.mp4", "size": 1000}).json()
 check("an upload can be cancelled", a.delete(f"/api/upload/{c['id']}").status_code == 200 and a.put(f"/api/upload/{c['id']}/0", content=b"x" * 1000, headers=H).status_code == 404)
+
+spoof = a.post("/api/upload/start", json={"name": "fake.mp4", "size": 64}).json()
+a.put(f"/api/upload/{spoof['id']}/0", content=b"MZ" + b"\x00" * 62, headers=H)
+check("a renamed executable/non-video with .mp4 extension is rejected at finish (400)", a.post(f"/api/upload/{spoof['id']}/finish", json={}).status_code == 400)
 
 print("\n%d failed" % len(fails) if fails else "\nALL PASSED")
 sys.exit(1 if fails else 0)

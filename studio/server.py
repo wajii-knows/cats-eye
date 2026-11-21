@@ -871,6 +871,8 @@ def create_from_file(file: UploadFile = File(...), options: str = Form("{}"), cr
                 if size > limit:
                     raise HTTPException(413, f"That file is too big. The limit is {config.MAX_UPLOAD_MB} MB.")
                 f.write(chunk)
+        if not media.looks_like_video(tmp, ext):
+            raise HTTPException(400, "That file does not appear to be a valid video.")
         try:
             with _create_lock:
                 _job_slots()
@@ -1006,6 +1008,9 @@ def upload_finish(upid: str):
             raise HTTPException(409, f"Piece {missing[0] + 1} of {meta['parts']} has not arrived yet.")
         if sum(p.stat().st_size for p in parts) != meta["size"]:
             raise HTTPException(400, "The pieces do not add up to the file.")
+        if not media.looks_like_video(parts[0], meta["ext"]):
+            shutil.rmtree(d, ignore_errors=True)
+            raise HTTPException(400, "That file does not appear to be a valid video.")
         try:
             with _create_lock:
                 _job_slots()

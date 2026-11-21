@@ -570,6 +570,108 @@ def run_all_tests():
                 proc.kill()
                 proc.wait(timeout=5)
 
+    print("\n=== 12. Colab Deletion Persistence & Stale Upload Drop ===")
+    with tempfile.TemporaryDirectory(prefix="test_colab_del_") as tmp_del:
+        del_dir = Path(tmp_del)
+        w_dir = del_dir / "work"
+        d_dir = del_dir / "durable"
+        d_store = LocalFolderStore(d_dir)
+
+        # A. Coalescing duplicate enqueues + silently dropping deleted local files with 0 errors
+        up = DurableUploader(d_store, max_workers=1)
+        f_ghost = w_dir / "ghost_job.json"
+        w_dir.mkdir(parents=True, exist_ok=True)
+        f_ghost.write_text('{"id": "ghost"}', encoding="utf-8")
+        for _ in range(5):
+            up.enqueue_file(f_ghost, "users/u_local/jobs/ghost/job.json")
+        check("Duplicate enqueues for same path coalesce into 1 queued item", up.get_status()["pending_count"] == 1)
+        f_ghost.unlink()
+        up.start()
+        for _ in range(40):
+            if up.is_idle():
+                break
+            time.sleep(0.05)
+        up.stop()
+        st_ghost = up.get_status()
+        check(
+            "Deleted local file before upload drops silently with 0 errors and safe_to_disconnect=True",
+            st_ghost["pending_count"] == 0 and st_ghost["last_error"] is None and st_ghost["safe_to_disconnect"] is True
+            and not d_store.exists("users/u_local/jobs/ghost/job.json"),
+            str(st_ghost),
+        )
+
+        # B. jobs.delete + account.delete_creator erase Drive durable copies so Colab restart does NOT restore them
+        from studio import account, creators, ctx, jobs  # noqa: E402
+        from studio.storage import colab as _colab  # noqa: E402
+
+        orig_data = config.DATA_DIR
+        orig_u = config.USERS_DIR
+        orig_colab_flag = config.COLAB_MODE
+        orig_owner_pw = config.OWNER_PASSWORD
+        orig_mgr = _colab.get_colab_manager(create=False)
+        try:
+            config.DATA_DIR = w_dir
+            config.USERS_DIR = w_dir / "users"
+            config.USERS_DIR.mkdir(parents=True, exist_ok=True)
+            config.COLAB_MODE = True
+            config.OWNER_PASSWORD = "pw-delete-test"
+
+            mgr_del = ColabManager(work_dir=w_dir, durable_dir=d_dir)
+            mgr_del.start(force_lease=True)
+            _colab.set_colab_manager(mgr_del)
+
+            with ctx.as_user("u_local"):
+                j_del = jobs.create({"type": "file", "path": "", "name": "gone.mp4"}, {}, enqueue=False)
+                jid_del = j_del["id"]
+                cr = creators.create({"name": "GoneCreator"})
+                cid_del = cr["id"]
+                j_cr = jobs.create({"type": "file", "path": "", "name": "crv.mp4"}, {}, enqueue=False, creator=cid_del)
+                j_cr["status"] = "done"
+                jobs.save(j_cr)
+                jobs._q.remove(j_del["id"])
+                jobs._q.remove(j_cr["id"])
+
+                # Drain uploader so durable Drive store definitely holds job.json before deletion
+                for _ in range(50):
+                    if mgr_del.uploader.is_idle():
+                        break
+                    time.sleep(0.05)
+                rel_j = f"users/u_local/jobs/{jid_del}/job.json"
+                check("Job uploaded to durable Drive store before delete", d_store.exists(rel_j) or mgr_del.durable_store.exists(rel_j))
+
+                jobs.delete(jid_del)
+                check(
+                    "jobs.delete removes job.json from durable Drive store and prevents uploader errors",
+                    not mgr_del.durable_store.exists(rel_j)
+                    and not (Path(j_del["dir"]).exists())
+                    and mgr_del.uploader.get_status()["last_error"] is None,
+                )
+
+                # Manually place creator.json on durable store too, then delete creator
+                c_rel = jobs._durable_rel(creators.root(cid_del) / "creator.json") or f"users/u_local/creators/{cid_del}/creator.json"
+                mgr_del.durable_store.put_file(creators.root(cid_del) / "creator.json", c_rel)
+                account.delete_creator(cid_del)
+                check(
+                    "account.delete_creator removes creator and its videos from durable Drive store",
+                    not mgr_del.durable_store.exists(c_rel) and not mgr_del.durable_store.list(f"users/u_local/creators/{cid_del}"),
+                )
+
+            mgr_del.stop()
+            # Restart fresh ColabManager on same work & durable dirs: deleted job MUST stay gone!
+            mgr_re = ColabManager(work_dir=w_dir, durable_dir=d_dir)
+            mgr_re.start(force_lease=True)
+            check(
+                "Restarting ColabManager does NOT resurrect deleted job or creator",
+                not (w_dir / rel_j).exists() and not (w_dir / c_rel).exists(),
+            )
+            mgr_re.stop()
+        finally:
+            _colab.set_colab_manager(orig_mgr)
+            config.DATA_DIR = orig_data
+            config.USERS_DIR = orig_u
+            config.COLAB_MODE = orig_colab_flag
+            config.OWNER_PASSWORD = orig_owner_pw
+
     print(f"\n==========================================")
     print(f"Colab Checkpoint Tests Complete: {len(fails)} failures.")
     print(f"==========================================")

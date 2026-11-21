@@ -32,12 +32,26 @@ def delete_clip(jid: str, cid: str) -> bool:
     job["clips"] = [c for c in job["clips"] if c["id"] != cid]
     jobs.save(job)
     d = Path(job["dir"])
-    for name in (clip.get("file"), clip.get("cover")):
+    for name in (clip.get("file"), clip.get("cover"), f"{cid}.ass", f"{cid}.json"):
         if name:
             (d / "clips" / Path(str(name)).name).unlink(missing_ok=True)
     src = clip.get("src")
-    if src and Path(src).parent == d:              # the piece of video fetched just for this clip
+    if src and Path(src).parent in (d, d / "clips"):  # the piece of video fetched just for this clip
         Path(src).unlink(missing_ok=True)
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                clip_dir_rel = jobs._durable_rel(d / "clips") or f"users/{job['user']}/jobs/{jid}/clips"
+                mgr.uploader.cancel_prefix(f"{clip_dir_rel}/{cid}")
+                mgr.durable_store.delete_prefix(f"{clip_dir_rel}/{cid}")
+                for name in (clip.get("file"), clip.get("cover"), f"{cid}.ass", f"{cid}.json"):
+                    if name:
+                        mgr.durable_store.delete(f"{clip_dir_rel}/{Path(str(name)).name}")
+                mgr.db_checkpoint_mgr.mark_dirty()
+        except Exception:
+            pass
     ctx.bump()
     return True
 
@@ -116,7 +130,19 @@ def delete_creator(cid: str) -> dict:
         jobs.delete(j["id"])
     with creators._lock:
         creators._mine().pop(cid, None)
-    shutil.rmtree(creators.root(cid), ignore_errors=True)
+    c_root = creators.root(cid)
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                pref = jobs._durable_rel(c_root) or f"users/{ctx.uid()}/creators/{cid}"
+                mgr.uploader.cancel_prefix(pref)
+                mgr.durable_store.delete_prefix(pref)
+                mgr.db_checkpoint_mgr.mark_dirty()
+        except Exception:
+            pass
+    shutil.rmtree(c_root, ignore_errors=True)
     ctx.bump()
     return {"ok": True, "videos": len(mine)}
 
@@ -152,5 +178,16 @@ def delete_account(uid: str) -> dict:
     except Exception:  # noqa: BLE001
         pass
     usage.forget(uid)
+    if config.COLAB_MODE:
+        try:
+            from studio.storage.colab import get_colab_manager
+            mgr = get_colab_manager(create=False)
+            if mgr:
+                pref = jobs._durable_rel(config.user_dir(uid)) or f"users/{uid}"
+                mgr.uploader.cancel_prefix(pref)
+                mgr.durable_store.delete_prefix(pref)
+                mgr.db_checkpoint_mgr.mark_dirty()
+        except Exception:
+            pass
     shutil.rmtree(config.user_dir(uid), ignore_errors=True)
     return {"ok": True}
